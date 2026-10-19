@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 7 -- DISTILL: the RL champion re-collects camera demos.
+"""ARM_BCRL006 フェーズ7。蒸留。RLの優勝方策でカメラ付きデモを再収集する。
 
-The teacher is a STATE policy: it reads the block pose, which only the
-simulator knows. The student is a VISUOMOTOR policy: it sees a wrist camera and
-its own joint angles, which is all the real robot has. Phase 7 is the bridge --
-run the teacher, record (rgb, qpos) -> teacher action, and hand that to phase 8.
+教師は状態方策で、シミュレータしか知らないワークの姿勢を読んでいる。
+生徒は視覚運動方策で、手首カメラと自分の関節角しか見ない。実機にあるのは
+それだけ。フェーズ7はその橋渡しで、教師を走らせて
+(rgb, qpos) -> 教師の行動 を記録し、フェーズ8に渡す。
 
-This is the standard privileged-teacher / sensor-student pattern, and it is the
-reason the deployed artifact needs no object pose at runtime.
+特権教師／センサ生徒の定番の型そのもので、配備する成果物が実行時に
+ワークの姿勢を要らない理由がこれ。
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Shared fixtures. Every test here runs on CPU in seconds and needs no
-trained artifact, because a test suite that needs the pipeline to have run is
-a test suite nobody runs."""
+"""共有のフィクスチャ。ここのテストは全部CPUで数秒で終わり、学習済みの
+成果物も要らない。パイプラインを走らせないと動かないテストは、誰も
+走らせないテストだから。"""
 
 import os
 import sys

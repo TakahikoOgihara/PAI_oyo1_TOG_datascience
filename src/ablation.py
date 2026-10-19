@@ -1,52 +1,52 @@
 # -*- coding: utf-8 -*-
-"""THE STUDY -- does MimicGen help? does domain randomisation help? do they
-compose?
+"""比較実験。MimicGen は効くのか、ドメインランダム化は効くのか、
+その2つは組み合わさるのか。
 
-Four TRAINING conditions (the 2x2 over the two data-side interventions):
+学習側の4条件（データ側の2つの介入の 2x2）:
 
-    A  baseline      mimicgen off   DR off
-    B  mimicgen      mimicgen on    DR off
-    C  dr            mimicgen off   DR on
-    D  mimicgen_dr   mimicgen on    DR on
+    A  baseline      mimicgen なし   DR なし
+    B  mimicgen      mimicgen あり   DR なし
+    C  dr            mimicgen なし   DR あり
+    D  mimicgen_dr   mimicgen あり   DR あり
 
-Each trained policy is evaluated on BOTH test environments:
+学習した方策は、2つの試験環境の両方で評価する:
 
-    nominal      DR off -- "the bench exactly as modelled"
-    randomised   DR on  -- "the bench with honest uncertainty in mass, friction,
-                           servo gains, start pose, lighting and clutter"
+    nominal      DR なし。「モデル化したとおりのベンチ」
+    randomised   DR あり。「質量、摩擦、サーボゲイン、初期姿勢、照明、
+                           置き物に、正直な不確かさを入れたベンチ」
 
-EVALUATING ON BOTH IS THE POINT, and it is the part most single-number
-comparisons get wrong. One test environment cannot separate "this intervention
-made the policy better" from "this intervention made the test easier or
-harder". Measured only on a nominal bench, a DR-trained policy typically looks
-WORSE than a baseline that quietly overfitted to it -- and a team that stops
-there ships the overfitted one. The 4x2 grid is what turns four numbers into a
-conclusion you can act on:
+両方で測ることが要点で、単一の数値で比べる議論がいちばん外すところ。
+試験環境が1つだと「介入で方策が良くなった」と「介入で試験が易しく
+（難しく）なった」を区別できない。公称ベンチだけで測ると、DRで学習した
+方策は、そこに静かに過適合した素のベースラインより悪く見えるのが普通で、
+そこで止めたチームは過適合した方を出荷する。4x2 の格子は、4つの数字を
+行動に移せる結論に変えるためにある。読み方は次のとおり:
 
-    * the nominal column          how much capacity each intervention spent
-    * the randomised column       how much robustness it bought
-    * randomised - nominal        the sim-to-real-shaped gap, per condition
-    * D vs B and D vs C           whether the two interventions compose or
-                                  compete for the same fixed model capacity
 
-Each cell is repeated over ``ablation.seeds``. A success rate measured once on
-256 episodes already carries a +-3 pp standard error before seed variance is
-counted at all; reporting mean and spread is the difference between a result
-and an anecdote.
+    * nominal 列            各介入がモデル容量をどれだけ使ったか
+    * randomised 列         それでどれだけ頑健性を買えたか
+    * randomised - nominal  条件ごとの、実機移行で問題になる形の落差
+    * D vs B、D vs C        2つの介入が足し合うのか、同じ有限の容量を
+                                  取り合うのか
 
-WHY THE COMPARISON RUNS ON THE BC STAGE (phases 1 -> 1.5 -> 2 -> 3 -> 4). Both
-interventions act on the DATASET, and BC is the one stage whose output is a
-pure function of the dataset. Inserting PPO and the ACT distillation between
-cause and effect would add two stochastic stages to every cell and multiply the
-cost by the whole pipeline instead of by seven minutes -- for a result that
-would be harder, not easier, to attribute.
+各セルは ``ablation.seeds`` の分だけ繰り返す。256エピソードで1回測った
+成功率には、シード間のばらつきを数える前から±3ポイントの標準誤差が
+ある。平均とばらつきを併記するかどうかが、結果と逸話の違いになる。
 
-This script is an ORCHESTRATOR: it drives the same phase scripts ``run_all.sh``
-drives, with Hydra overrides. Nothing about the pipeline is duplicated here, so
-the numbers it reports are produced by the code that ships.
 
-    python src/ablation.py                       # the full 4 x 3-seed grid (~80 min)
-    python src/ablation.py ablation.seeds=[0]    # one seed (~27 min)
+比較を BC 段（フェーズ 1 -> 1.5 -> 2 -> 3 -> 4）で回す理由。2つの介入は
+どちらもデータセットに作用し、BC は出力がデータセットの純粋な関数に
+なる唯一の段だから。原因と結果の間に PPO と ACT の蒸留を挟むと、各セルに
+確率的な段が2つ増え、コストが7分ではなくパイプライン全体の倍率で乗る。
+しかも結果の帰属は易しくなるどころか難しくなる。だからここは BC 段に
+絞っている。
+
+このスクリプトは指揮役で、``run_all.sh`` が叩くのと同じフェーズ
+スクリプトを Hydra 上書き付きで叩くだけ。パイプラインは複製していない
+ので、報告する数値は出荷しているコードが出した数値そのもの。
+
+    python src/ablation.py                       # 4条件 x 3シードの全格子（約80分）
+    python src/ablation.py ablation.seeds=[0]    # 1シード（約27分）
     python src/ablation.py ablation.match_data=true
 """
 
@@ -71,12 +71,12 @@ DATA_DIR = os.path.join(REPO_ROOT, "artifacts", "data")
 EVAL_DIR = os.path.join(REPO_ROOT, "artifacts", "eval")
 DEPLOY_DIR = os.path.join(REPO_ROOT, "artifacts", "deploy")
 
-# name -> (mimicgen, DR, report label, extra Hydra overrides)
+# 名前 -> (mimicgen, DR, 表示ラベル, 追加の Hydra 上書き)
 #
-# The last four are a DECOMPOSITION of the DR axis, not part of the 2x2. They
-# are off by default (ablation.enable_conditions) and exist because "DR helps"
-# is not an actionable finding: the next question a client asks is WHICH part
-# of it helped, and the answer decides what has to be measured on the real
+# 後ろの4つは DR 軸の分解で、2x2 の一部ではない。既定ではOFF
+# （ablation.enable_conditions）。「DRは効く」だけでは行動に移せない
+# からで、次に聞かれるのは「DRのどの部分が効いたのか」であり、その
+# 答えが実機ベンチで何を測るべきかを決める。
 # bench. `bash run_ablation.sh ablation.enable_conditions=[dr_pose,dr_physics]
 # ablation.out_dir=artifacts/ablation_dr` runs it into its own directory.
 _DR_PHYSICS_OFF = ["env.domain_rand.object_mass=[0.020,0.020]",
@@ -85,30 +85,30 @@ _DR_PHYSICS_OFF = ["env.domain_rand.object_mass=[0.020,0.020]",
                    "env.domain_rand.desk_color_jitter=0.0",
                    "env.domain_rand.object_color_jitter=0.0",
                    "env.domain_rand.light_intensity=[900.0,900.0]"]
-# (mimicgen, DR, report label, extra Hydra overrides, collect-episode multiplier)
+# (mimicgen, DR, 表示ラベル, 追加の Hydra 上書き, 収集エピソード倍率)
 CONDITIONS = {
     "baseline":     (False, False, "A: neither", [], 1.0),
     "mimicgen":     (True, False, "B: MimicGen only", [], 1.0),
     "dr":           (False, True, "C: DR only", [], 1.0),
     "mimicgen_dr":  (True, True, "D: MimicGen + DR", [], 1.0),
 
-    # --- opt-in: DATA-MATCHED controls -------------------------------------
-    # MimicGen changes two things at once: how MANY rows the dataset has, and
-    # how DIVERSE the object poses in it are. These two conditions collect
-    # proportionally more REAL expert demonstrations instead, so the row count
-    # matches the MimicGen conditions and only the diversity differs.
+    # --- 任意: データ量を揃えた対照条件 ------------------------------------
+    # MimicGen は2つのことを同時に変える。データセットの行数と、その中の
+    # 物体姿勢の多様性。この2条件はその代わりに本物のエキスパートデモを
+    # 比例して多く集めるので、行数は MimicGen 条件と揃い、違うのは
+    # 多様性だけになる。
     #
-    # The practical reading is the one that matters: in simulation, collecting
-    # more expert demos is nearly free, so if A+ matches B then MimicGen bought
-    # nothing HERE. On a real robot the same rows cost a person an afternoon
-    # each -- which is the entire reason MimicGen exists. The comparison
-    # measures the mechanism; the deployment context decides its value.
+    # 実務上の読み方はこう。シミュレータではエキスパートデモの追加収集が
+    # ほぼ無料なので、A+ が B に並ぶなら、ここでは MimicGen は何も買って
+    # いない。実機では同じ行数が1本あたり人の半日を食う。それが MimicGen の
+    # 存在理由そのもの。比較が測るのは仕組みで、その価値を決めるのは
+    # 使う場面。
     "baseline_xl":  (False, False, "A+: more real demos (data-matched)", [], 2.8),
     "dr_xl":        (False, True, "C+: DR, more real demos (data-matched)", [], 2.8),
 
-    # --- opt-in: DR decomposition ------------------------------------------
-    # "DR helps" (or does not) is not actionable -- the next question is WHICH
-    # part, and the answer decides what has to be measured on the real bench.
+    # --- 任意: DR の分解 ----------------------------------------------------
+    # 「DRは効く（効かない）」では行動に移せない。次の問いは「どの部分が」で、
+    # その答えが実機ベンチで何を測るべきかを決める。
     "dr_pose":      (False, True, "C1: DR, start pose only", _DR_PHYSICS_OFF, 1.0),
     "dr_physics":   (False, True, "C2: DR, physics only",
                      ["env.domain_rand.joint_noise=0.0"], 1.0),
@@ -135,15 +135,15 @@ def _py(script: str, *over: str) -> list:
 
 
 def _subsample(path: str, max_transitions: int, seed: int) -> int:
-    """Trim a dataset to at most ``max_transitions`` rows, whole demos only.
+    """データセットを最大 ``max_transitions`` 行に切る。デモ単位でしか切らない。
 
-    ``ablation.match_data=true`` uses this to give every condition the same
-    number of training rows. MimicGen adds data VOLUME as well as data
-    DIVERSITY, and with matching off the B/D columns enjoy both; the gap
-    between the two runs is exactly "how much of MimicGen's gain is just more
-    rows". Trimming by whole trajectories, not by frames, keeps every episode
-    intact -- BC trains on transitions but the dataset's unit of independence
-    is the demonstration.
+    ``ablation.match_data=true`` がこれを使って、全条件の学習行数を揃える。
+    MimicGen はデータの多様性だけでなく量も増やすので、揃えないと B/D 列は
+    両方の恩恵を受ける。揃えた実行との差が、そのまま「MimicGen の利得の
+    うち、どれだけが単に行数のおかげか」になる。フレーム単位ではなく
+    軌跡単位で切るのは、エピソードを壊さないため。BC が学習するのは
+    遷移だが、データセットの独立の単位はデモ1本なので、切るのは必ず
+    デモの切れ目にする。
     """
     import torch
     d = torch.load(path, map_location="cpu", weights_only=False)
@@ -167,13 +167,13 @@ def run_cell(cfg: DictConfig, cond: str, seed: int, out_dir: str,
     common = [f"seed={seed}", f"env.domain_rand.enable={dr}"] + list(extra)
     t0 = time.perf_counter()
 
-    # -- phase 1: collect. Camera OFF: the study measures a STATE policy, and
-    # rendering would cost 20x the wall clock for frames nothing here reads.
+    # -- フェーズ1: 収集。カメラはOFF。この実験が測るのは状態方策で、
+    # ここで誰も読まない画像を描くと実時間が20倍になる。
     episodes = max(1, round(int(a.collect_episodes) * float(ep_scale)))
     _run(_py("src/collect_data.py", *common,
              f"collect.episodes={episodes}", "collect.camera=false"),
          f"{cond}/collect")
-    # -- phase 1.5: MimicGen (the first axis)
+    # -- フェーズ1.5: MimicGen（1つ目の軸）
     _run(_py("src/mimicgen_generate.py", *common, f"mimicgen.enable={mimic}",
              "collect.camera=false"), f"{cond}/mimicgen")
 
@@ -181,13 +181,13 @@ def run_cell(cfg: DictConfig, cond: str, seed: int, out_dir: str,
     if cap_transitions:
         kept = _subsample(src_file, cap_transitions, seed)
         print(f"    [{cond}] data-matched to {kept} transitions")
-    # -- phase 2 + 3
+    # -- フェーズ2 + 3
     _run(_py("src/preprocess.py", *common, f"mimicgen.enable={mimic}"), f"{cond}/preprocess")
     _run(_py("scripts/train_bc_robomimic.py", *common,
              f"bc.num_epochs={int(a.bc_epochs)}"), f"{cond}/bc")
 
-    # -- phase 4, on BOTH test environments. Same ONNX, same episode count,
-    # same seed offset: only env.domain_rand.enable differs.
+    # -- フェーズ4。2つの試験環境の両方で。同じONNX、同じエピソード数、
+    # 同じシードずらしで、違うのは env.domain_rand.enable だけ。
     onnx = os.path.join(DEPLOY_DIR, "arm_bcrl006_bc_policy.onnx")
     cell = {"condition": cond, "seed": seed, "mimicgen": mimic, "domain_rand": dr}
     for regime in list(a.eval_regimes):
@@ -196,8 +196,8 @@ def run_cell(cfg: DictConfig, cond: str, seed: int, out_dir: str,
               "--onnx_path", onnx, "--eval_out", tag,
               "--num_envs", str(int(cfg.eval.num_envs)), "--seed", str(1000 + seed),
               "--eval_dr", "on" if regime == "randomised" else "off",
-              # the TEST bench is the same for every condition: the decomposition
-              # overrides shape the TRAINING data, never the battery
+              # 試験ベンチは全条件で同じ。分解用の上書きが変えるのは学習データで、
+              # 評価側は変えない
               "--set", f"eval.episodes={int(a.eval_episodes)}",
               f"eval.num_envs={int(cfg.eval.num_envs)}",
               f"eval.max_steps={int(cfg.eval.max_steps)}"], f"{cond}/eval_{regime}")
@@ -211,8 +211,8 @@ def run_cell(cfg: DictConfig, cond: str, seed: int, out_dir: str,
                        "source": pre["demo_source"]}
     cell["wall_clock_s"] = round(time.perf_counter() - t0, 1)
 
-    # keep the per-cell evidence: the dataset summary, the BC ONNX and both
-    # eval reports, so a reviewer can re-check any single number
+    # セルごとの証跡を残す。データセット要約、BCのONNX、両方の評価結果。
+    # 査読者が任意の数値を1つずつ再確認できるようにするため
     for name in ("collect_summary.json", "preprocess_summary.json", "mimicgen_summary.json"):
         p = os.path.join(DATA_DIR, name)
         if os.path.exists(p):
@@ -274,9 +274,9 @@ def write_markdown(agg: dict, regimes: list, path: str, meta: dict,
                  f"{e[f'{last}/mean_max_lift'] * 1000:.1f} | "
                  f"{e[f'{last}/mean_reward']:.0f} |")
     if cells:
-        # Per-seed numbers, not just the mean. At the edge of feasibility the
-        # seed-to-seed spread can exceed the effect being measured, and a
-        # reader has to be able to see that rather than be told it.
+        # 平均だけでなくシードごとの数値も出す。実現可能性の境界では、シード間
+        # のばらつきが測ろうとしている効果を超えることがある。それは読む側が
+        # 自分で見られるようにすべきで、言葉で言い添えるものではない。
         L += ["", "Per-seed success rate (every cell, no aggregation):", "",
               "| condition | seed | train rows | "
               + " | ".join(regimes) + " |",
@@ -337,8 +337,8 @@ def main(cfg: DictConfig) -> None:
 
     cap = None
     if bool(a.match_data):
-        # the smallest condition is always the one with no MimicGen; measure it
-        # once and cap everything to it
+        # いちばん小さい条件は必ず MimicGen 無しの条件。それを1回測って、
+        # 全条件をその値に揃える
         print("[ablation] match_data=true -- probing the baseline dataset size first")
         probe = run_cell(cfg, "baseline", seeds[0],
                          os.path.join(out_root, "_probe"), None)
@@ -369,8 +369,8 @@ def main(cfg: DictConfig) -> None:
     plot_grid(agg, regimes, os.path.join(out_root, "ablation.png"))
     print("\n" + md)
 
-    # both trackers: MLflow is the ledger a reviewer audits, W&B is the page a
-    # stakeholder looks at
+    # トラッカーは両方使う。MLflow は査読者が監査する台帳、W&B は
+    # 関係者が眺めるページ。
     with mlflow_run(cfg, run_name=f"{cfg.experiment_name}_ablation"):
         mlflow.log_params({f"ablation.{k}": v for k, v in meta.items()})
         for cond, e in agg.items():

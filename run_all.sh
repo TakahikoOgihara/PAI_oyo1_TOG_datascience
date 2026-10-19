@@ -1,54 +1,54 @@
 #!/bin/bash
 # =====================================================================
-# ARM_BCRL006 end-to-end pipeline -- runs on ONE local PC, no container,
-# no GPU server, no cloud. Physics is MuJoCo (CPU); only the learning
-# phases touch the GPU.
+# ARM_BCRL006 の一気通貫パイプライン。ローカルPC 1台で動く。コンテナ不要、
+# GPUサーバー不要、クラウド不要。物理は MuJoCo（CPU）で、GPUを使うのは学習
+# フェーズだけ。
 #
-#   0) assets      myCobot 280 Pi MJCF, generated from the joint origins in
-#                  deploy/raspi/mycobot_fk.py and CROSS-CHECKED against
-#                  MuJoCo's own forward kinematics (no download, no meshes)
-#   1) collect     scripted IK expert demos, wrist camera recorded, sharded
-#                  across processes
-#  1.5) MIMICGEN   OFF BY DEFAULT -- this phase prints a skip line and exits.
-#                  With mimicgen.enable=true: annotate -> warp each
-#                  object-centric subtask onto a freshly randomised scene ->
-#                  replay -> keep what the env's own success term accepts.
-#                  The demo SOURCE is swappable: ~10 real-robot demos work here
-#                  unchanged (see configs/mimicgen/default.yaml) -- that regime, not this
-#                  simulator, is what MimicGen is for. The 2x2 study measured
-#                  generated rows as worth ~0.6 of a collected row HERE, so the
-#                  default collects more instead (artifacts/ablation/ has the numbers).
-#   2) preprocess  outlier clip + robomimic HDF5 + IMAGE-QUALITY GATE
-#                  -> stops the pipeline if the wrist frames are unusable
-#   3) BC          robomimic BC (low_dim) -> ONNX + MLflow Registry
-#   4) eval        closed loop: random / scripted expert / BC
-#   5) LeRobot     dataset export (OPTIONAL -- self-skips if not installed)
-#   6) RL          stable-baselines3 PPO initialised FROM the BC weights,
-#                  with the four stabilisers + closed-loop checkpoint
-#                  selection + a regression guard against BC
-#   7) distill     the RL champion re-collects wrist-camera demos
-#   8) visuomotor  ACT (default) / Diffusion Policy -> ONNX + Registry
-#   9) eval        closed-loop evaluation of the deployed image policy
-#  10) deploy      RELEASE GATE -> edge bundle for the Jetson/Pi stack
+#   0) assets      myCobot 280 Pi の MJCF を deploy/raspi/mycobot_fk.py の
+#                  関節原点から生成し、MuJoCo 自身の順運動学と突き合わせて検証
+#                  （ダウンロードもメッシュも不要）
+#   1) collect     スクリプトIKエキスパートでデモ収集。手首カメラも記録し、
+#                  プロセス分割で並列に回す
+#  1.5) MIMICGEN   既定ではOFF。このフェーズはスキップ行を出して終わる。
+#                  mimicgen.enable=true にすると、サブタスクを注釈して
+#                  物体中心の各区間を新しくランダム化したシーンへ転写し、
+#                  再生して環境自身の成功判定が通ったものだけ残す。
+#                  デモの出どころは差し替え可能で、実機デモ10本程度でも
+#                  そのまま動く（configs/mimicgen/default.yaml 参照）。
+#                  MimicGen が本来効くのはシミュレータではなくそちらの状況。
+#                  ここでは生成1本の価値が収集1本の約0.6と実測されたので、
+#                  既定は収集を増やす側にした（数値は artifacts/ablation/）。
+#   2) preprocess  外れ値クリップ + robomimic HDF5 + 画質ゲート
+#                  -> 手首カメラ画像が使えないならここで止める
+#   3) BC          robomimic の BC（low_dim）-> ONNX + MLflow 登録
+#   4) eval        閉ループ評価: ランダム / スクリプトエキスパート / BC
+#   5) LeRobot     データセット書き出し（任意。未インストールなら自動スキップ）
+#   6) RL          BCの重みから初期化した stable-baselines3 の PPO。
+#                  4つの安定化策 + 閉ループでのチェックポイント選択 +
+#                  BCに対する性能劣化ガード付き
+#   7) distill     RLの優勝方策で手首カメラ付きデモを再収集
+#   8) visuomotor  ACT（既定）/ Diffusion Policy -> ONNX + 登録
+#   9) eval        配備する画像方策の閉ループ評価
+#  10) deploy      リリースゲート -> Jetson/Pi 向けエッジ配布物
 #
-# TWO GATES CAN STOP THE RUN (phase 2 and phase 10). That is the point: they
-# exist to stop an artifact that cannot work from reaching a robot.
+# ゲートは2つ（フェーズ2とフェーズ10）。途中で止まるのが正しい挙動で、
+# 動かない成果物をロボットに届けないために置いてある。
 #
-# THE STUDY IS A SEPARATE COMMAND -- it is not part of the pipeline:
-#   bash run_ablation.sh          # 2x2 MimicGen x domain randomisation
+# 比較実験は別コマンド。パイプラインには含めない:
+#   bash run_ablation.sh          # MimicGen x ドメインランダム化の 2x2
 #
-# Config is Hydra's (configs/config.yaml + configs/*/). Override anything:
+# 設定は Hydra（configs/config.yaml と configs/*/）。何でも上書きできる:
 #   bash run_all.sh bc.num_epochs=100 rl.total_iterations=200
-#   bash run_all.sh visuomotor.type=diffusion       # Diffusion Policy variant
-#   bash run_all.sh rl.bc_init=false                # PPO-from-scratch ablation
-#   bash run_all.sh mimicgen.enable=true            # turn phase 1.5 ON (default off)
+#   bash run_all.sh visuomotor.type=diffusion       # Diffusion Policy 版
+#   bash run_all.sh rl.bc_init=false                # PPOをゼロから回す比較
+#   bash run_all.sh mimicgen.enable=true            # フェーズ1.5をON（既定OFF）
 #   bash run_all.sh mimicgen.max_source_demos=10 mimicgen.selection=random
-#                                                   # rehearse the few-real-demos regime
+#                                                   # 実機デモが少ない状況を模す
 #   bash run_all.sh env.domain_rand.joint_friction_scale=[0.8,1.3]
-#                                                   # switch on a DR axis that ships off
-#   bash run_all.sh collect.workers=8               # more render shards
+#                                                   # 既定OFFのDR軸を有効化
+#   bash run_all.sh collect.workers=8               # レンダリング分割を増やす
 #
-# Smoke test (~6 min, proves the plumbing, proves nothing about the policy):
+# スモークテスト（約6分。配線の確認であって、方策の性能は何も示さない）:
 #   bash run_all.sh collect.episodes=1 mimicgen.episodes=1 bc.num_epochs=5 \
 #        rl.total_iterations=6 rl.critic_warmup_iters=2 rl.bc_anchor_decay_iters=4 \
 #        rl.save_interval=2 visuomotor.distill.episodes=1 visuomotor.train.epochs=2 \
@@ -56,15 +56,15 @@
 #        eval.episodes=1 eval.num_envs=8 eval.visuomotor_num_envs=4 \
 #        mimicgen.min_yield=0 deploy.force=true
 #
-# Usage:  bash run_all.sh [extra hydra overrides...]
+# 使い方:  bash run_all.sh [追加の hydra 上書き...]
 # =====================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
 export PWD="$(pwd)"
-# MuJoCo offscreen backend. osmesa needs no display server and no driver EGL
-# stack, which is what makes this reproducible under WSL2, in a container and
-# over SSH. egl / glfw also work here and measure within 20 % -- the bottleneck
-# is the per-frame read-back, not rasterisation (operations guide §5).
+# MuJoCo のオフスクリーン描画バックエンド。osmesa はディスプレイサーバも
+# ドライバのEGLスタックも要らないので、WSL2、コンテナ、SSH越しで同じ結果に
+# なる。egl / glfw も動くし差は20%以内。律速はフレームごとの読み戻しで、
+# ラスタライズではない。
 export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
 PY="${PY:-$(command -v python)}"
 if [ -z "$PY" ]; then echo "no python on PATH -- activate the venv (see setup_env.sh)"; exit 1; fi

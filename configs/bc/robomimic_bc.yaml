@@ -1,46 +1,46 @@
-# robomimic BC settings -- the same library and the same entry point
-# (robomimic.scripts.train.train) ARM_BCRL005 used. robomimic is NVIDIA's
-# imitation-learning library and its HDF5 schema is the de-facto interchange
-# format for manipulation demonstrations; keeping both is the single most
-# transferable thing in this repo.
+# robomimic の BC 設定。ARM_BCRL005 が使ったのと同じライブラリ、同じ入口
+# （robomimic.scripts.train.train）。robomimic は NVIDIA の模倣学習
+# ライブラリで、その HDF5 スキーマは操作デモの事実上の共通形式。この2つを
+# 保っていることが、このリポジトリでいちばん他へ持ち出しやすい部分に
+# なっている。
 #
-# INSTALL NOTE (ARM_BCRL006): robomimic is installed with --no-deps because
-# its `egl_probe` dependency is a CMake C extension that only exists to pick a
-# GPU for robosuite's offscreen renderer -- machinery this project never
-# touches (experiment.rollout.enabled = False; closed-loop evaluation is
-# src/evaluate.py's job, in MuJoCo). setup_env.sh installs the real runtime
-# dependencies explicitly. See change log §7.
+# インストールの注記（ARM_BCRL006）。robomimic は --no-deps で入れている。
+# 依存の `egl_probe` は CMake の C 拡張で、robosuite のオフスクリーン描画用に
+# GPU を選ぶためだけに存在する。このプロジェクトは触らない
+# （experiment.rollout.enabled = False。閉ループ評価は src/evaluate.py の
+# 仕事で、MuJoCo 上で行う）。実行時に必要な依存は setup_env.sh が明示的に
+# 入れている。
 #
-# ROLE: this low_dim BC is the TEACHER-SIDE bootstrap -- it initialises the
-# PPO actor (phase 6), and the RL champion then generates the camera demos the
-# visuomotor stage trains on (phases 7-8). The deployed edge policy is the
-# visuomotor one; this MLP never needs the object pose at runtime.
+# 役割。この low_dim の BC は教師側の踏み台。PPO のアクターを初期化し
+# （フェーズ6）、その RL 優勝方策が、視覚運動段の学習に使うカメラ付きデモ
+# を作る（フェーズ7-8）。配備するエッジ方策は視覚運動側で、この MLP は
+# 実行時にワークの姿勢を必要としない。
 #
-# hidden MUST equal rl.hidden (configs/rl/ppo.yaml): phase 6 copies these MLP
-# weights layer-by-layer into the PPO actor, which requires identical shapes
-# (and rl.activation=relu to match robomimic's MLP default).
+# hidden は rl.hidden（configs/rl/ppo.yaml）と一致させること。フェーズ6が
+# この MLP の重みを層ごとに PPO のアクターへ写すので、形が同じでないと
+# 通らない（robomimic の MLP 既定に合わせて rl.activation=relu も必要）。
 hidden: [256, 128, 64]     # algo.actor_layer_dims
 lr: 0.001
 weight_decay: 0.00001
 batch_size: 256
 num_epochs: 150
 val_split: 0.15
-outlier_z: 4.0             # preprocess z-score clip threshold (flat channels)
-# false (default): low_dim BC -- the variant BC->RL fine-tuning consumes.
-# true: robomimic's VisualCore image-BC variant, kept as a baseline switch --
-# NOT used for RL initialisation and NOT the deployed visuomotor policy.
+outlier_z: 4.0             # 前処理のzスコアのクリップ閾値（平坦チャンネル）
+# false（既定）: low_dim の BC。BC->RL 微調整が使うのはこちら。
+# true: robomimic の VisualCore による画像BC。比較用の切り替えとして
+# 残してあるだけで、RL の初期化にも使わず、配備する方策でもない。
 use_rgb: false
 
-# --- wrist-camera DATA-QUALITY GATE (src/preprocess.py) -------------------
-# ARM_BCRL002 asked a human to "review camera_samples.png". A human did, and
-# passed an image set that was almost uniformly white, so the deployed policy
-# trained on frames carrying no information about where the block is. "Look at
-# the picture" is not a gate. These are. Phase 2 measures them on the collected
-# frames and STOPS the pipeline rather than spending GPU hours on blank input.
+# --- 手首カメラの画質ゲート（src/preprocess.py） -------------------------
+# ARM_BCRL002 は人に「camera_samples.png を確認して」と頼んでいた。人は
+# 確認し、ほぼ一様に白い画像の集合を通した。その結果、配備した方策は
+# ワークの位置の情報を持たない画像で学習された。「写真を見る」はゲートに
+# ならない。こちらはなる。フェーズ2が収集した画像でこれを測り、真っ白な
+# 入力にGPU時間を費やす前にパイプラインを止める。
 image_quality:
   enable: true
-  max_mean: 200.0        # mean pixel value (0-255) over the dataset
-  min_mean: 30.0         # too dark is just as unusable as too bright
-  max_saturated: 0.15    # fraction of pixels >= 250 in ANY channel
-  min_dynamic_range: 40.0  # p95 - p5 of the luminance histogram
-  min_red_frames: 0.50   # fraction of frames where the red block is detectable
+  max_mean: 200.0        # データセット全体の平均画素値（0-255）
+  min_mean: 30.0         # 暗すぎるのも、明るすぎるのと同じく使えない
+  max_saturated: 0.15    # いずれかのチャンネルで250以上の画素の割合
+  min_dynamic_range: 40.0  # 輝度ヒストグラムの p95 - p5
+  min_red_frames: 0.50   # 赤いワークが検出できたフレームの割合

@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 10 -- deployment: re-export/confirm the MLflow registry
-champions and assemble the EDGE BUNDLE.
+"""ARM_BCRL006 フェーズ10。配備。MLflow レジストリの優勝モデルを再書き出し
+して確認し、エッジ配布物を組み立てる。
 
-Same deployment-time step as ARM_BCRL001 ("give me whatever the registry says
-is champion, re-export/validate it, confirm the deployed artifact's
-closed-loop metrics"), extended with the visuomotor policy and the edge
+ARM_BCRL001 と同じ配備時の手順（「レジストリが優勝と言っているものを
+出せ、再書き出しして検証し、配備する成果物の閉ループ指標を確認する」）を、
+視覚運動方策とエッジ配布物の分だけ広げたもの:
 bundle:
 
-  * arm_bcrl006_bc_policy   robomimic checkpoint -> ONNX re-export + confirm
-  * arm_bcrl006_rl_policy   deployed ONNX closed-loop confirmation
-  * arm_bcrl006_act_policy  (or _dp_policy) deployed ONNX closed-loop
-                            confirmation -- THE artifact that ships
-  * artifacts/deploy/edge_bundle/   the exact file set to scp to the Jetson
-    Orin Nano (visuomotor ONNX(+denoiser), deploy metadata, env camera spec)
-    -- operations guide appendix A copies this directory verbatim.
+  * arm_bcrl006_bc_policy   robomimic のチェックポイント -> ONNX 再書き出しと確認
+  * arm_bcrl006_rl_policy   配備する ONNX の閉ループ確認
+  * arm_bcrl006_act_policy  （または _dp_policy）配備する ONNX の閉ループ
+                            確認。これが実際に出荷する成果物
+  * artifacts/deploy/edge_bundle/   Jetson Orin Nano に scp する正確な
+    ファイル一式（視覚運動方策の ONNX（＋デノイザ）、配備メタデータ、
+    環境のカメラ仕様）。配備手順ではこのディレクトリをそのまま複製する。
 """
 
 from __future__ import annotations
@@ -34,11 +34,11 @@ sys.path.insert(0, REPO_ROOT)
 from scripts.train_bc_robomimic import export_checkpoint_to_onnx
 
 SIM = os.path.join(REPO_ROOT, "mujoco_sim", "train_arm_mujoco.py")
-# One simulator process per evaluation, launched with THIS interpreter
-# (sys.executable), so the child inherits the same virtualenv. ARM_BCRL005
-# needed Isaac Sim's own python.sh here and had to document that isaaclab.sh
-# swallows the child's exit code; neither problem exists locally, and
-# check=True now actually stops the pipeline when the simulator fails.
+# 評価1本につきシミュレータを1プロセス。起動にはこのインタプリタ
+# （sys.executable）を使うので、子プロセスも同じ仮想環境を継ぐ。
+# ARM_BCRL005 では Isaac Sim 付属の python.sh が必要で、isaaclab.sh が
+# 子の終了コードを飲むことまで注記する必要があった。ローカルでは
+# どちらも起きず、check=True が実際にパイプラインを止めてくれる。
 def _sim_env() -> dict:
     env = dict(os.environ)
     env.setdefault("MUJOCO_GL", "osmesa")
@@ -80,18 +80,18 @@ def _confirm_onnx(cfg: DictConfig, onnx_path: str, tag: str) -> dict:
 
 
 def _release_gate(cfg: DictConfig, metrics: dict, tag: str) -> bool:
-    """Decide whether this artifact is allowed onto the robot.
+    """この成果物をロボットに載せてよいかを判定する。
 
-    ARM_BCRL002 had no such decision: phase 10 packaged whatever phase 8
-    produced. What it packaged succeeded 55 % of the time IN SIMULATION with a
-    64 mm mean placement error and a mean peak lift of 69 mm -- i.e. it often
-    never picked the block up at all. Hardware only subtracts from a
-    simulation number, so shipping that guaranteed the observed 0-out-of-10
-    (field-failure notes §2, cause D).
+    ARM_BCRL002 にはこの判定が無く、フェーズ10はフェーズ8が作ったものを
+    何でも梱包した。梱包されたものはシミュレータ上でも成功率55%、平均
+    設置誤差64mm、平均最高到達高さ69mm。つまりワークを持ち上げられて
+    いない回が多かった。実機はシミュレータの数値から引き算するだけなので、
+    それを出荷すれば実機 0/10 は確定だった（原因の分類は実機の失敗記録に
+    残してある）。
 
-    A release gate is the cheapest control in the whole pipeline, and it is
-    the one thing that turns "we have an MLOps stack" into "our MLOps stack
-    decides what ships". Thresholds: configs/config.yaml -> deploy.
+    リリースゲートはパイプライン全体でいちばん安い管理策で、「MLOps の
+    仕組みがある」を「うちの MLOps が出荷を決めている」に変える唯一の
+    部品。しきい値は configs/config.yaml の deploy。
     """
     d = cfg.deploy
     checks = [
@@ -111,8 +111,8 @@ def _release_gate(cfg: DictConfig, metrics: dict, tag: str) -> bool:
               f"{comp} {threshold}")
         if not ok:
             failures.append(f"{name}={value:.4f} (need {comp} {threshold})")
-    # safety telemetry is reported but never blocks: it describes HOW the
-    # policy behaved near the desk, which is diagnostic, not pass/fail
+    # 安全系のテレメトリは報告するが、合否には使わない。机の近くで方策が
+    # どう振る舞ったかを説明する診断情報で、合否判定ではない
     if "mean_min_tool_z" in metrics:
         print(f"[infer]   INFO  mean_min_tool_z = "
               f"{metrics['mean_min_tool_z'] * 1000:.1f} mm, worst = "
@@ -139,9 +139,9 @@ def _release_gate(cfg: DictConfig, metrics: dict, tag: str) -> bool:
 
 
 def _copy_into(src: str, dst_dir: str) -> None:
-    # NOT shutil.copy2: /workspace_host is a bind mount where stale artifacts
-    # may be owned by another uid -- content writes pass via ACL but copystat's
-    # utime/chmod need ownership and die with EPERM. Recreate, copy bytes only.
+    # shutil.copy2 は使わない。/workspace_host はバインドマウントで、古い
+    # 成果物が別のuid所有になっていることがある。内容の書き込みはACLで
+    # 通るが、copystat の utime/chmod は所有権が要るので EPERM で死ぬ。
     dst = os.path.join(dst_dir, os.path.basename(src))
     if os.path.exists(dst):
         os.remove(dst)
@@ -156,14 +156,14 @@ def _build_edge_bundle(cfg: DictConfig, vm_onnx: str, report: dict) -> str:
     if os.path.exists(denoiser):
         _copy_into(denoiser, bundle)
     for side in (vm_onnx + ".data", denoiser + ".data"):
-        if os.path.exists(side):  # ONNX external-weights companion file
+        if os.path.exists(side):  # ONNX の外部重みファイル
             _copy_into(side, bundle)
-    # ONNX metadata copied out so the Jetson runtime self-configures even
-    # when it loads a TensorRT .engine (which carries no ONNX metadata)
+    # ONNX のメタデータを外に出す。TensorRT の .engine（ONNXのメタデータを
+    # 持たない）を読んだときでも、Jetson 側が自分で構成できるようにするため
     import onnxruntime as ort
     meta = ort.InferenceSession(
         vm_onnx, providers=["CPUExecutionProvider"]).get_modelmeta().custom_metadata_map or {}
-    # the runtime-relevant slice of the env config: control contract + camera
+    # 環境設定のうち実行時に関係する部分だけ。制御の契約とカメラ仕様
     edge_cfg = {
         "onnx_metadata": dict(meta),
         "control_dt": float(cfg.env.control_dt),
@@ -173,11 +173,11 @@ def _build_edge_bundle(cfg: DictConfig, vm_onnx: str, report: dict) -> str:
         "camera": OmegaConf.to_container(cfg.env.camera, resolve=True),
         "execute_horizon": int(cfg.visuomotor.execute_horizon),
         "onnx": os.path.basename(vm_onnx),
-        # The SAFETY ENVELOPE the Raspberry Pi will enforce
-        # (configs/safety/default.yaml -> deploy/raspi/safety.py). Shipping it
-        # with the model is the same principle as shipping the camera spec:
-        # no constant is ever hand-copied onto the robot, so the guard and the
-        # simulator cannot drift apart (design notes §3).
+        # Raspberry Pi 側が強制する安全包絡
+        # （configs/safety/default.yaml -> deploy/raspi/safety.py）。モデルと
+        # 一緒に出荷するのはカメラ仕様と同じ考え方で、定数を手作業でロボットに
+        # 写さないようにするため。そうすればガードとシミュレータが食い違わない。
+        # ここは設計上の約束として、必ず自動で運ぶ。
         "safety": OmegaConf.to_container(cfg.safety, resolve=True),
     }
     with open(os.path.join(bundle, "edge_config.json"), "w", encoding="utf-8") as f:
@@ -202,7 +202,7 @@ def main(cfg: DictConfig) -> None:
     os.makedirs(deploy_dir, exist_ok=True)
     report = {}
 
-    # --- BC champion: re-export from the robomimic checkpoint -------------
+    # --- BC 優勝モデル: robomimic のチェックポイントから再書き出し --------
     bc_ckpt = _champion_checkpoint(cfg, "arm_bcrl006_bc_policy")
     if bc_ckpt and os.path.exists(bc_ckpt):
         onnx_path = os.path.join(deploy_dir, "arm_bcrl006_bc_policy.onnx")
@@ -212,13 +212,13 @@ def main(cfg: DictConfig) -> None:
         report["bc"] = {"checkpoint": bc_ckpt, "onnx_path": onnx_path,
                         "onnx_validation": val, "latency": lat, "deployed_metrics": metrics}
 
-    # --- RL champion: confirm the deployed ONNX artifact ------------------
+    # --- RL 優勝モデル: 配備する ONNX 成果物を確認 ------------------------
     rl_onnx = os.path.join(deploy_dir, "arm_bcrl006_rl_policy.onnx")
     if os.path.exists(rl_onnx):
         metrics = _confirm_onnx(cfg, rl_onnx, "rl_deployed")
         report["rl"] = {"onnx_path": rl_onnx, "deployed_metrics": metrics}
 
-    # --- visuomotor champion (the edge artifact): confirm + bundle --------
+    # --- 視覚運動の優勝モデル（エッジ成果物）: 確認して梱包 --------------
     short = "dp" if str(cfg.visuomotor.type) == "diffusion" else "act"
     vm_onnx = os.path.join(deploy_dir, f"arm_bcrl006_{short}_policy.onnx")
     if os.path.exists(vm_onnx):
@@ -236,9 +236,9 @@ def main(cfg: DictConfig) -> None:
             report["edge_bundle"] = bundle
             print(f"[infer] edge bundle ready: {bundle} (scp to the Jetson -- the deployment notes)")
 
-    # The deployment confirmation is the LAST measurement anyone makes, and it
-    # is the one a stakeholder actually asks about ("does the thing we are
-    # shipping work?"). Put it on the same W&B page as the training curves.
+    # 配備確認は誰かが最後に行う測定で、関係者が実際に聞くのはこれ
+    # （「出荷するものは動くのか」）。学習曲線と同じ W&B のページに
+    # 載せておく。
     from mlops.tracking import wandb_log_eval
     deployed = {k.upper(): v["deployed_metrics"] for k, v in report.items()
                 if isinstance(v, dict) and "deployed_metrics" in v}
@@ -248,8 +248,8 @@ def main(cfg: DictConfig) -> None:
     with open(os.path.join(deploy_dir, "deploy_report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
     print("[infer] deploy report:", json.dumps(report, indent=2)[:1600])
-    # A pipeline that "finished successfully" while producing nothing
-    # deployable is the failure mode this whole phase exists to prevent.
+    # 「正常終了したのに配備できるものが何も無い」が、このフェーズが
+    # 防ぐために存在する失敗の形。
     if report.get("release_gate") and not report["release_gate"]["passed"]:
         raise SystemExit(1)
 

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""The PPO stabilisers, tested for the property each one exists to provide.
+"""PPO の安定化策を、それぞれが存在する理由の性質で試験する。
 
-ARM_BCRL005 lost a full training run to a BC anchor that looked correct and did
-nothing (the decay was applied to the loss coefficient, which Adam is invariant
-to). A stabiliser you cannot test is a stabiliser you are assuming.
+ARM_BCRL005 は、正しく見えて何もしていなかった BC アンカーで、学習1本を
+丸ごと失った（減衰を損失の係数に当てていて、Adam はそれに対して不変）。
+試験できない安定化策は、あると仮定しているだけの安定化策。
 """
 
 import numpy as np
@@ -19,10 +19,10 @@ def _actor(seed=0):
 
 
 def test_anchor_decay_moves_the_step_size_not_the_loss():
-    """THE bug from ARM_BCRL005. Adam's update is lr * m / (sqrt(v) + eps),
-    which is INVARIANT to scaling the loss -- so a coefficient ramped 1.0 -> 0.0
-    changes nothing until it is exactly 0. The decay must land on the learning
-    rate, and this test fails if anyone ever moves it back."""
+    """ARM_BCRL005 のあのバグ。Adam の更新は lr * m / (sqrt(v) + eps) で、
+    損失の定数倍に対して不変。だから係数を 1.0 -> 0.0 と落としても、
+    正確に0になるまで何も変わらない。減衰は学習率に当てないといけないし、
+    誰かがそれを戻したらこのテストが落ちる。"""
     actor, ref = _actor(0), _actor(1).eval()
     a = BCAnchor(actor, ref, lr=1e-3, coef=1.0, decay_iters=10, minibatch=32,
                  max_grad_norm=1.0, start_iter=0)
@@ -36,8 +36,8 @@ def test_anchor_decay_moves_the_step_size_not_the_loss():
 
 
 def test_anchor_is_inactive_before_the_critic_warm_up_ends():
-    """Anchoring while the actor is frozen would fight the freeze."""
-    actor, ref = _actor(0), _actor(1).eval()      # genuinely different weights
+    """アクターが凍結している間にアンカーをかけると、凍結と喧嘩する。"""
+    actor, ref = _actor(0), _actor(1).eval()      # 本当に違う重み
     a = BCAnchor(actor, ref, lr=1e-3, coef=1.0, decay_iters=10, minibatch=32,
                  max_grad_norm=1.0, start_iter=5)
     before = [p.detach().clone() for p in actor.parameters()]
@@ -64,16 +64,16 @@ def test_anchor_reaches_min_coef_and_stops():
     a = BCAnchor(actor, ref, lr=1e-3, coef=1.0, decay_iters=10, minibatch=8,
                  max_grad_norm=1.0, start_iter=0, min_coef=0.0)
     assert a.coef_at(0) == 1.0
-    assert a.coef_at(100) == 0.0             # RL is eventually free of BC
+    assert a.coef_at(100) == 0.0             # RL は最終的に BC から自由になる
     a2 = BCAnchor(actor, ref, lr=1e-3, coef=1.0, decay_iters=10, minibatch=8,
                   max_grad_norm=1.0, start_iter=0, min_coef=0.25)
     assert a2.coef_at(100) == 0.25
 
 
 def test_bc_weight_transfer_reproduces_the_bc_policy():
-    """The premise of phase 6. If the copy is not exact the phase is not
-    'fine-tuning from BC', it is 'PPO from a warm-ish start' -- a different
-    method with different results."""
+    """フェーズ6の前提。複製が厳密でなければ、このフェーズは「BC からの
+    微調整」ではなく「少し温まった状態からの PPO」になる。別の手法で、
+    別の結果になる。"""
     from mujoco_sim.rl_ppo import _linears
     src = nn.Sequential(nn.Linear(31, 256), nn.ReLU(), nn.Linear(256, 128), nn.ReLU(),
                         nn.Linear(128, 64), nn.ReLU(), nn.Linear(64, 7), nn.Tanh())
@@ -82,7 +82,7 @@ def test_bc_weight_transfer_reproduces_the_bc_policy():
     a, b = _linears(src), _linears(dst)
     assert len(a) == len(b) == 4
     x = torch.randn(128, 31)
-    assert float((src(x) - dst(x)).abs().max()) > 1e-3       # different to start with
+    assert float((src(x) - dst(x)).abs().max()) > 1e-3       # 最初は違っている
     with torch.no_grad():
         for u, v in zip(a, b):
             v.weight.copy_(u.weight)

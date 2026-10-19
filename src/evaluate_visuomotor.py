@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 9 -- closed-loop evaluation of the deployed visuomotor
-policy (ACT by default, Diffusion Policy when visuomotor.type=diffusion).
+"""ARM_BCRL006 フェーズ9。配備する視覚運動方策の閉ループ評価。
+既定は ACT、visuomotor.type=diffusion なら Diffusion Policy。
 
-Runs the exported ONNX in the SAME PhysX env (camera on, receding-horizon
-chunk execution handled by the sim script's OnnxPolicy), then assembles the
-full story: scripted expert vs BC vs BC+RL vs the deployed image policy --
-the numbers that show what each pipeline stage bought.
+書き出した ONNX を同じ環境で走らせる（カメラON、後退ホライズンの
+チャンク実行はシミュレータ側の OnnxPolicy が面倒を見る）。そのうえで
+スクリプトエキスパート vs BC vs BC+RL vs 配備する画像方策を並べ、
+パイプラインの各段が何を買ったのかが見える形にする。
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ from mlops import plotting
 from mlops.tracking import mlflow_run, wandb_log_eval
 
 SIM = os.path.join(REPO_ROOT, "mujoco_sim", "train_arm_mujoco.py")
-# One simulator process per evaluation, launched with THIS interpreter
-# (sys.executable), so the child inherits the same virtualenv. ARM_BCRL005
-# needed Isaac Sim's own python.sh here and had to document that isaaclab.sh
-# swallows the child's exit code; neither problem exists locally, and
-# check=True now actually stops the pipeline when the simulator fails.
+# 評価1本につきシミュレータを1プロセス。起動にはこのインタプリタ
+# （sys.executable）を使うので、子プロセスも同じ仮想環境を継ぐ。
+# ARM_BCRL005 では Isaac Sim 付属の python.sh が必要で、isaaclab.sh が
+# 子の終了コードを飲むことまで注記する必要があった。ローカルでは
+# どちらも起きず、check=True が実際にパイプラインを止めてくれる。
 def _sim_env() -> dict:
     env = dict(os.environ)
     env.setdefault("MUJOCO_GL", "osmesa")
@@ -45,11 +45,11 @@ def main(cfg: DictConfig) -> None:
     onnx_path = os.path.join(REPO_ROOT, "artifacts", "deploy",
                              f"arm_bcrl006_{short}_policy.onnx")
 
-    # An image policy renders a frame per environment per step, so its battery
-    # is sized by the graphics budget, not by statistics: 16 envs x 4 episodes
-    # = 64 episodes ~ 4 min, against 256 episodes ~ 20 min for the state
-    # policies. eval.visuomotor_* keeps that trade explicit instead of hidden
-    # in a magic number (operations guide §5).
+    # 画像方策は1環境1ステップごとに1枚描くので、評価の規模は統計ではなく
+    # 描画の予算で決まる。16環境 x 4エピソード = 64エピソードで約4分、
+    # 状態方策の256エピソードは約20分。eval.visuomotor_* はその取引を
+    # マジックナンバーに隠さず明示するためにある。数を変えたいときは
+    # ここを触る。
     n_envs = int(cfg.eval.get("visuomotor_num_envs", cfg.eval.num_envs))
     n_eps = int(cfg.eval.get("visuomotor_episodes", cfg.eval.episodes))
     cmd = [sys.executable, SIM, "--num_envs", str(n_envs),

@@ -1,42 +1,41 @@
 # -*- coding: utf-8 -*-
-"""MimicGen step 2 -- GENERATE: warp annotated demos onto new scenes.
+"""MimicGen の2段目。生成。注釈済みデモを新しいシーンへ転写する。
 
-The algorithm (Mandlekar et al., "MimicGen: A Data Generation System for
-Scalable Robot Learning using Human Demonstrations", CoRL 2023) in full:
+アルゴリズム全体（Mandlekar et al., "MimicGen: A Data Generation System
+for Scalable Robot Learning using Human Demonstrations", CoRL 2023）:
 
-  1. Split every source demonstration into SUBTASKS at the gripper transition
-     (mimicgen/annotate.py). Each subtask is ABOUT one reference object:
-        subtask 0  reach & grasp   -> reference = the block
-        subtask 1  transport & place -> reference = the place target
-  2. Reset the environment. It now has a new block pose and a new target.
-  3. For each subtask, pick a source demonstration (nearest neighbour on the
-     reference pose, sampled among the k nearest so the output keeps variety).
-  4. Re-express that subtask's END-EFFECTOR TARGET trajectory in the reference
-     object's frame, then put that frame where the object is NOW:
+  1. 元デモをグリッパの遷移でサブタスクに割る（mimicgen/annotate.py）。
+     各サブタスクは1つの基準物体についてのもの:
+        サブタスク0  近づいて掴む    -> 基準 = ブロック
+        サブタスク1  運んで置く      -> 基準 = 設置目標
+  2. 環境をリセットする。新しいブロック姿勢と新しい目標になる。
+  3. サブタスクごとに元デモを1本選ぶ（基準姿勢の最近傍。出力の多様性を
+     保つため、近い順にk本の中から抽選する）。
+  4. そのサブタスクの手先目標の軌跡を、基準物体の座標系で表し直し、
+     その座標系を「いま物体がある場所」へ置く:
 
-         T_eef_new = T_ref_new @ inv(T_ref_src) @ T_eef_src          (eq. 1)
+         T_eef_new = T_ref_new @ inv(T_ref_src) @ T_eef_src          (式1)
 
-  5. Interpolate from wherever the arm actually is to the first warped pose,
-     so the segments join without a jump.
-  6. EXECUTE it in the simulator (mujoco_sim/train_arm_mujoco.py --mode
-     mimicgen) through the same IK and the same 7-dim action space the
-     scripted expert uses, and keep the episode ONLY if the environment's own
-     success term fires.
+  5. アームの実際の位置から最初の転写姿勢まで補間する。そうすれば
+     区間がつながって飛びが出ない。
+  6. シミュレータで実行する（mujoco_sim/train_arm_mujoco.py --mode
+     mimicgen）。スクリプトエキスパートと同じIK、同じ7次元の行動空間を
+     通し、環境自身の成功判定が出たエピソードだけ残す。
 
-Step 6 is what makes this data generation rather than data interpolation: a
-warped trajectory is a HYPOTHESIS, and physics is the referee. Typical yields
-are 30-80 %, and a collapsing yield is a signal (the source demos are not
-transferable to the new poses), which is why ``mimicgen.min_yield`` stops the
-run instead of quietly training on 30 demonstrations.
+6段目があることで、これはデータの補間ではなくデータの生成になる。
+転写した軌跡は仮説で、審判は物理。歩留まりはだいたい30〜80%で、
+落ちていく歩留まりは信号（元デモが新しい姿勢へ移せていない）。だから
+``mimicgen.min_yield`` は、デモ30本で黙って学習するのではなく実行を
+止める。
 
-Rotation is carried through the warp in full SE(3), but the executor is
-POSITION-ONLY IK (``mimicgen.ik_mode`` was "position" in ARM_BCRL005 too): for
-this task the tool always points down and the block is a solid of revolution,
-so the warp's rotation is the source's rotation and tracking it adds nothing.
-The pose maths is written for the general case so that stops being true the day
-an asymmetric object is added, not the day someone rewrites this file.
+回転は転写の中では完全な SE(3) で運ぶが、実行側は位置のみのIK
+（``mimicgen.ik_mode`` は ARM_BCRL005 でも "position" だった）。この
+タスクではツールが常に下を向き、ブロックは回転体なので、転写の回転は
+元デモの回転そのもので、追従させても何も増えない。姿勢の計算は一般の
+場合で書いてある。非対称な物体が入った日に効くようにしてあり、誰かが
+このファイルを書き直す日を待たなくてよい。
 
-Self-test (numpy only, no simulator):
+自己テスト（numpy だけ。シミュレータ不要）:
     python3 mimicgen/generation.py
 """
 
@@ -53,12 +52,12 @@ from mimicgen.pose_np import mat_to_quat, quat_to_mat  # noqa: E402
 
 GRASP_SIGNAL = "grasp"
 EEF_NAME = "eef"
-# subtask index -> the object its trajectory is expressed relative to
+# サブタスクの添字 -> その軌跡を相対で表す物体
 SUBTASK_REFERENCE = ("object", "place_target")
 
 
 def _inv(T: np.ndarray) -> np.ndarray:
-    """Inverse of a homogeneous transform (transpose, not a linear solve)."""
+    """同次変換の逆（線形方程式を解かずに転置で作る）。"""
     out = np.eye(4)
     R = T[:3, :3]
     out[:3, :3] = R.T
@@ -67,13 +66,13 @@ def _inv(T: np.ndarray) -> np.ndarray:
 
 
 def _slerp(q0: np.ndarray, q1: np.ndarray, t: np.ndarray) -> np.ndarray:
-    """Shortest-arc quaternion interpolation, wxyz, t: (K,) -> (K, 4)."""
+    """最短弧のクォータニオン補間。wxyz、t: (K,) -> (K, 4)。"""
     q0 = q0 / np.linalg.norm(q0)
     q1 = q1 / np.linalg.norm(q1)
     if float(q0 @ q1) < 0.0:
-        q1 = -q1                                # take the short way round
+        q1 = -q1                                # 近い方の弧を通る
     dot = float(np.clip(q0 @ q1, -1.0, 1.0))
-    if dot > 0.9995:                            # nearly parallel: lerp is exact
+    if dot > 0.9995:                            # ほぼ平行なら線形補間で厳密
         q = q0[None, :] + t[:, None] * (q1 - q0)[None, :]
     else:
         th = np.arccos(dot)
@@ -84,8 +83,8 @@ def _slerp(q0: np.ndarray, q1: np.ndarray, t: np.ndarray) -> np.ndarray:
 
 
 def interpolate_poses(T_from: np.ndarray, T_to: np.ndarray, steps: int) -> np.ndarray:
-    """(steps, 4, 4) linear-in-position / SLERP-in-rotation path, EXCLUDING
-    ``T_from`` and INCLUDING ``T_to``."""
+    """(steps, 4, 4) の経路。位置は線形、回転は SLERP。``T_from`` を含まず
+    ``T_to`` を含む。"""
     if steps <= 0:
         return T_to[None, ...].copy()
     t = np.linspace(0.0, 1.0, steps + 1)[1:]
@@ -100,17 +99,17 @@ def interpolate_poses(T_from: np.ndarray, T_to: np.ndarray, steps: int) -> np.nd
 
 def warp(src_targets: np.ndarray, T_ref_src: np.ndarray,
          T_ref_new: np.ndarray) -> np.ndarray:
-    """EQUATION 1. ``src_targets``: (T, 4, 4) -> (T, 4, 4) in the new scene."""
+    """式1。``src_targets``: (T, 4, 4) -> 新しいシーンでの (T, 4, 4)。"""
     delta = T_ref_new @ _inv(T_ref_src)
     return delta[None, ...] @ src_targets
 
 
 # ---------------------------------------------------------------------------
 class DataGenInfoPool:
-    """The annotated source demonstrations, split into subtasks.
+    """注釈済みの元デモを、サブタスクに割った形で持つ。
 
-    One pool is built per process and then queried once per generation attempt,
-    so everything expensive (HDF5 read, segmentation) happens once.
+    プロセスごとに1つ作り、生成の試行ごとに引くだけ。だから高い処理
+    （HDF5 の読み込み、区切り）は1回で済む。
     """
 
     def __init__(self, episodes: list):
@@ -130,8 +129,8 @@ class DataGenInfoPool:
                 g = data[k]
                 dg = g["obs"]["datagen_info"]
                 sig = np.asarray(dg["subtask_term_signals"][GRASP_SIGNAL])[:, 0]
-                # the 0 -> 1 transition is the subtask boundary; MimicGen's
-                # convention puts the end of subtask 0 one step after it
+                # 0 -> 1 の遷移がサブタスクの境界。MimicGen の慣習では、
+                # サブタスク0の終わりはその1ステップ後に置く
                 boundary = int(np.argmax(sig > 0)) + 1
                 T = int(g["actions"].shape[0])
                 eps.append({
@@ -146,11 +145,10 @@ class DataGenInfoPool:
         return cls(eps)
 
     def reference_positions(self, subtask: int) -> np.ndarray:
-        """(n_demos, 3) reference-object position at the START of ``subtask``.
+        """``subtask`` の開始時点での基準物体の位置 (n_demos, 3)。
 
-        This is the key the nearest-neighbour source selection uses: "which
-        recorded demonstration started this subtask with the object closest to
-        where it is now".
+        最近傍の元デモ選択が使う鍵がこれ。「このサブタスクを、いまの位置に
+        いちばん近い物体位置で始めた記録はどれか」。
         """
         name = SUBTASK_REFERENCE[subtask]
         s0 = [ep["bounds"][subtask][0] for ep in self.episodes]
@@ -169,7 +167,7 @@ class DataGenInfoPool:
 
 # ---------------------------------------------------------------------------
 class TrajectoryGenerator:
-    """Plans ONE generation attempt: new scene -> a target-pose sequence."""
+    """生成の試行1回を計画する。新しいシーン -> 目標姿勢の列。"""
 
     def __init__(self, pool: DataGenInfoPool, selection: str = "nearest_neighbor_object",
                  nn_k: int = 3, interpolation_steps: int = 12,
@@ -187,14 +185,14 @@ class TrajectoryGenerator:
         if self.selection == "random" or n <= self.nn_k:
             return int(self.rng.randint(n))
         d = np.linalg.norm(self._ref_pos[subtask] - ref_pos_new[None, :], axis=1)
-        # uniform among the k nearest, NOT the single nearest: always taking
-        # the argmin makes every generated demo in a region a copy of the same
-        # source trajectory, which is data volume without data diversity.
+        # 最近傍1本ではなく、近い順にk本から一様に選ぶ。常に最小を取ると、
+        # ある領域で生成したデモが全部同じ元軌跡の複製になり、データの量は
+        # 増えても多様性は増えない。
         return int(self.rng.choice(np.argpartition(d, self.nn_k - 1)[:self.nn_k]))
 
     def plan_subtask(self, subtask: int, T_ref_new: np.ndarray,
                      T_eef_now: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
-        """-> (target poses (K,4,4), gripper commands (K,), source demo index)."""
+        """-> (目標姿勢 (K,4,4), グリッパ指令 (K,), 元デモの添字)。"""
         src = self.select_source(subtask, T_ref_new[:3, 3])
         seg = self.pool.segment(src, subtask)
         warped = warp(seg["target"], seg["T_ref_src"], T_ref_new)
@@ -202,9 +200,9 @@ class TrajectoryGenerator:
         if self.interp > 0 and len(warped) > 0:
             bridge = interpolate_poses(T_eef_now, warped[0], self.interp)
             warped = np.concatenate([bridge, warped[1:]], axis=0)
-            # hold the subtask's first gripper command across the bridge: the
-            # bridge is a repositioning move, not part of the demonstrated
-            # manipulation, so the gripper must not change during it
+            # 橋渡しの間は、そのサブタスクの最初のグリッパ指令を保つ。橋渡しは
+            # 位置を取り直す移動で、実演された操作の一部ではないので、
+            # 途中でグリッパが変わってはいけない
             grip = np.concatenate([np.full(self.interp, grip[0]), grip[1:]])
         if self.action_noise > 0:
             warped = warped.copy()
@@ -214,11 +212,11 @@ class TrajectoryGenerator:
 
 # ---------------------------------------------------------------------------
 def _self_test() -> None:
-    # eq. 1 on a synthetic subtask: a straight descent onto a block
+    # 合成したサブタスクでの式1。ブロックへ真っ直ぐ降りる動き
     T_ref_src = np.eye(4)
     T_ref_src[:3, 3] = [0.20, -0.03, 0.015]
     src = np.zeros((10, 4, 4))
-    src[:, :3, :3] = np.diag([1.0, -1.0, -1.0])          # tool pointing down
+    src[:, :3, :3] = np.diag([1.0, -1.0, -1.0])          # ツールは下向き
     src[:, 3, 3] = 1.0
     src[:, :3, 3] = np.linspace([0.20, -0.03, 0.09], [0.20, -0.03, 0.023], 10)
 
@@ -230,14 +228,14 @@ def _self_test() -> None:
           f"{np.abs(out[:, :3, 3] - (src[:, :3, 3] + shift)).max():.2e}")
     assert np.abs(out[:, :3, 3] - (src[:, :3, 3] + shift)).max() < 1e-12
     assert np.abs(out[:, :3, :3] - src[:, :3, :3]).max() < 1e-12
-    # the RELATIVE geometry the demonstration encodes is what is preserved:
-    # the tool ends the segment exactly as far above the block as before
+    # 保たれるのは、デモが符号化している相対的な幾何。ツールは
+    # 区間の終わりで、以前と正確に同じだけブロックの上にいる
     rel_src = src[-1, :3, 3] - T_ref_src[:3, 3]
     rel_new = out[-1, :3, 3] - T_ref_new[:3, 3]
     print(f"grasp offset preserved        : {np.round(rel_src, 5)} -> {np.round(rel_new, 5)}")
     assert np.allclose(rel_src, rel_new)
 
-    # a rotated reference must rotate the trajectory about it (general SE(3))
+    # 基準を回したら、軌跡もその周りで回らないといけない（一般の SE(3)）
     a = 0.7
     T_rot = np.eye(4)
     T_rot[:3, :3] = [[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]]
@@ -247,7 +245,7 @@ def _self_test() -> None:
     assert np.allclose(np.linalg.norm(rel), np.linalg.norm(rel_src))
     print(f"rotated reference             : |offset| preserved ({np.linalg.norm(rel):.5f} m)")
 
-    # interpolation joins without a jump and lands exactly on the target
+    # 補間は飛びなくつながり、目標にちょうど着地する
     T_from = np.eye(4)
     T_from[:3, :3] = np.diag([1.0, -1.0, -1.0])
     T_from[:3, 3] = [0.25, 0.0, 0.10]
@@ -257,14 +255,14 @@ def _self_test() -> None:
     step = np.linalg.norm(np.diff(np.vstack([T_from[:3, 3][None], path[:, :3, 3]]), axis=0), axis=1)
     print(f"interpolation                 : {len(path)} steps, "
           f"max {step.max() * 1000:.1f} mm each, lands on target")
-    assert step.std() < 1e-9                   # uniform spacing
+    assert step.std() < 1e-9                   # 等間隔
 
-    # SLERP over a real rotation stays unit-norm and monotone
+    # 実際の回転に対する SLERP は、単位ノルムと単調性を保つ
     q = _slerp(np.array([1.0, 0, 0, 0]), np.array([0.0, 1.0, 0, 0]), np.linspace(0, 1, 5))
     assert np.allclose(np.linalg.norm(q, axis=-1), 1.0)
     print(f"slerp norms                   : {np.round(np.linalg.norm(q, axis=-1), 6)}")
 
-    # source selection keeps variety
+    # 元デモの選択は多様性を保つ
     pool = DataGenInfoPool([{
         "actions": np.zeros((20, 7)),
         "target": np.tile(np.eye(4), (20, 1, 1)),

@@ -1,26 +1,26 @@
 # =====================================================================
-# ARM_BCRL006 -- one Hydra config tree for the whole pipeline, run
-# entirely on a local PC with MuJoCo:
-#   assets     (MJCF generated from deploy/raspi/mycobot_fk.py, one-time)
-#   collect    (scripted IK expert, wrist camera recorded)
-#   -> MIMICGEN (phase 1.5): warp those demos onto new scenes, keep the
-#      successes -- and make the demo SOURCE swappable for real-robot demos
-#   -> preprocess + robomimic HDF5 + wrist-camera quality gate
-#   -> robomimic BC training (low_dim -- the RL-init teacher)
-#   -> closed-loop evaluation vs baselines
-#   -> PPO fine-tuning initialized FROM the BC weights (stable-baselines3)
-#   -> DISTILL: RL champion re-collects camera demos (teacher-student)
-#   -> visuomotor training (ACT default / Diffusion Policy variant)
-#   -> closed-loop visuomotor evaluation
-#   -> ONNX deploy + MLflow Registry champions + release gate + edge bundle
+# ARM_BCRL006。パイプライン全体を1つの Hydra 設定ツリーで扱う。
+# すべてローカルPC上の MuJoCo で動く:
+#   assets     （deploy/raspi/mycobot_fk.py から MJCF を生成。初回のみ）
+#   collect    （スクリプトIKエキスパート。手首カメラも記録）
+#   -> MIMICGEN（フェーズ1.5）。そのデモを新しいシーンへ転写し、成功した
+#      ものだけ残す。あわせてデモの出どころを実機デモに差し替えられる
+#   -> 前処理 + robomimic HDF5 + 手首カメラの画質ゲート
+#   -> robomimic の BC 学習（low_dim。RL初期化用の教師）
+#   -> ベースラインとの閉ループ比較評価
+#   -> BC の重みから初期化した PPO 微調整（stable-baselines3）
+#   -> 蒸留。RL優勝方策がカメラ付きデモを再収集（教師と生徒）
+#   -> 視覚運動方策の学習（既定 ACT / Diffusion Policy も選べる）
+#   -> 視覚運動方策の閉ループ評価
+#   -> ONNX 配備 + MLflow レジストリの優勝 + リリースゲート + エッジ配布物
 #
-# AND, orthogonal to the pipeline, the study this project was built to run:
-#   src/ablation.py -- 2x2 over {MimicGen off/on} x {domain randomisation
-#   off/on}, each condition evaluated on BOTH a nominal and a randomised test
-#   environment. See design notes §5.
+# さらに、パイプラインと直交して、このプロジェクトが回すために作った実験:
+#   src/ablation.py。{MimicGen off/on} x {ドメインランダム化 off/on} の 2x2
+#   で、各条件を公称とランダム化の両方の試験環境で評価する。設計の意図は
+#   src/ablation.py の docstring にある。
 #
-# There is exactly one simulator entry point: mujoco_sim/train_arm_mujoco.py
-# (modes: collect / mimicgen / eval_only / rl / distill / play).
+# シミュレータの入口はただ1つ: mujoco_sim/train_arm_mujoco.py
+# （モード: collect / mimicgen / eval_only / rl / distill / play）
 # =====================================================================
 defaults:
   - env: mycobot_pickplace
@@ -36,79 +36,79 @@ defaults:
 
 experiment_name: arm_bcrl006_pickplace
 seed: 42
-device: cuda          # training device. The SIMULATOR is always CPU (MuJoCo).
+device: cuda          # 学習に使うデバイス。シミュレータは常にCPU（MuJoCo）
 
 collect:
-  # 32 envs x 8 episode batches ~ 256 demos -- robomimic's canonical
-  # manipulation regime (~200 demos/task), same as ARM_BCRL005.
+  # 32環境 x 8エピソードバッチ ~ 256デモ。robomimic が標準とする操作
+  # タスクの規模（タスクあたり約200デモ）で、ARM_BCRL005 と同じ。
   #
-  # THIS IS THE MOST LOAD-BEARING NUMBER IN THE FILE, and it is set to what the
-  # ablation measured rather than to a round number (artifacts/ablation/):
+  # このファイルでいちばん効く数字。丸い数字ではなく、比較実験で測った値に
+  # してある（artifacts/ablation/）:
   #
-  #     ~13,000 rows of expert demonstrations  ->  BC success 0.001
-  #     ~37,000 rows of expert demonstrations  ->  BC success 0.885
-  #     ~36,000 rows, half of them MimicGen-generated  ->  0.539
+  #     エキスパートデモ 約13,000行  ->  BC の成功率 0.001
+  #     エキスパートデモ 約37,000行  ->  BC の成功率 0.885
+  #     約36,000行、うち半分が MimicGen 生成  ->  0.539
   #
-  # Two things follow, and both are in the default now.
-  #   1. There is a CLIFF. 8 batches (~20,000 rows) sits below it. 14 batches
-  #      (~36,000 rows) sits above it. Before tuning a learning rate, check
-  #      which side of the cliff you are on.
-  #   2. A MimicGen-generated row is worth roughly 60 % of a collected one --
-  #      it warps the same source trajectories onto new object poses, so it
-  #      adds coverage but no new information. In SIMULATION, where a
-  #      demonstration costs seconds, collect them. MimicGen is for the case
-  #      where a demonstration costs a person an afternoon (a real robot), and
-  #      that is the case phase 1.5 exists for.
+  # ここから2つ言えて、どちらも既定に反映してある。
+  #   1. 崖がある。8バッチ（約20,000行）は崖の下、14バッチ（約36,000行）は
+  #      崖の上。学習率をいじる前に、自分が崖のどちら側にいるのかを
+  #      確認すること。
+  #   2. MimicGen が生成した1行の価値は、収集した1行の約6割。同じ元の軌跡を
+  #      新しい物体姿勢へ転写しているので、被覆は増えるが新しい情報は
+  #      増えない。デモが数秒で手に入るシミュレータでは、収集した方が得。
+  #      MimicGen が効くのはデモ1本に人の半日がかかる場合（実機）で、
+  #      フェーズ1.5 はそのために存在する。
+  #      判断の根拠は configs/mimicgen/default.yaml に書いた。
   #
-  # This default changed BECAUSE of the measurement: 8 -> 14. That is what the
-  # experiment was for.
+  # この既定値は、測定の結果として 8 -> 14 に変えた。実験はそのために
+  # やった。
   num_envs: 32
-  episodes: 14            # per-env batches -> ~450 trajectories, ~36,000 rows
-  action_noise: 0.1       # DART-style: execute noisy action, label clean
-  novice_ratio: 0.1       # fraction of envs emulating a poor operator
-  keep_failed: false      # dataset = successful pick&place only
-  camera: true            # record wrist frames (needed by the phase-2 gate)
-  # Shard the run across processes. Rendering -- not physics -- is the
-  # bottleneck, and it is embarrassingly parallel: each worker owns its own
-  # MuJoCo model, data and GL context. 0 = auto (min(6, cpu_count // 3)).
+  episodes: 14            # 環境ごとのバッチ数 -> 約450軌跡、約36,000行
+  action_noise: 0.1       # DART流。ノイズを足した行動を実行し、ラベルは綺麗な行動
+  novice_ratio: 0.1       # 下手なオペレータを模す環境の割合
+  keep_failed: false      # データセットは成功した pick&place だけ
+  camera: true            # 手首画像を記録する（フェーズ2のゲートに必要）
+  # 実行をプロセス分割する。律速は物理ではなく描画で、そこは素直に並列化
+  # できる。各ワーカーが自分の MuJoCo モデル、データ、GLコンテキストを
+  # 持つ。0 = 自動（min(6, cpu_count // 3)）。
   workers: 0
 
 eval:
   num_envs: 64
   episodes: 4
-  max_steps: 1000         # a STEP BUDGET for the whole battery, not a per-
-                          # episode limit -- the env's own 240-step timeout
-                          # always fires first. ARM_BCRL005 used 300, which
-                          # silently delivered ~1 episode per env instead of
-                          # the 4 requested: a slow policy would finish 65
-                          # episodes where a fast one finished 193, so the two
-                          # were not compared on the same sample size.
-                          # 4 x 240 = 960 < 1000 guarantees the full battery.
-  # Image policies render every step, so their closed-loop battery is sized
-  # by the graphics budget rather than by statistics (operations guide §5).
+  max_steps: 1000         # 評価全体のステップ予算で、1エピソードの上限では
+                          # ない（環境自身の240ステップのタイムアウトが必ず
+                          # 先に効く）。ARM_BCRL005 は300にしていて、要求した
+                          # 4エピソードではなく環境あたり約1エピソードしか
+                          # 回っていなかった。遅い方策は65エピソード、速い
+                          # 方策は193エピソードになり、同じ標本数で比べて
+                          # いなかった。
+                          # 4 x 240 = 960 < 1000 なら全エピソードを保証できる。
+  # 画像方策は毎ステップ描画するので、閉ループ評価の規模は統計ではなく
+  # 描画の予算で決まる。
   visuomotor_num_envs: 16
   visuomotor_episodes: 4
 
 deploy:
-  # RELEASE GATE (phase 10, src/infer.py). An artifact that does not clear
-  # these thresholds IN SIMULATION is not allowed into the edge bundle. This
-  # is the cheapest quality control in the pipeline and it is the difference
-  # between "we deployed a model" and "we deployed a model that works".
-  min_success_rate: 0.55     # closed-loop success of the visuomotor policy.
-                             # The ACT student is distilled from the RL
-                             # teacher and distillation only loses, so this is
-                             # ~80 % of the teacher: demanding, but reachable.
-  max_place_err: 0.035       # m, mean |obj_xy - target_xy|
-  min_lift: 0.055            # m, mean peak block height (= lifted_thresh):
-                             # catches "never actually picked it up"
-  force: false               # true = build the bundle anyway (record WHY
-                             # somewhere when you use it)
+  # リリースゲート（フェーズ10、src/infer.py）。このしきい値をシミュレータ
+  # 上で超えられない成果物は、エッジ配布物に入れない。パイプラインで
+  # いちばん安い品質管理で、「モデルを配備した」と「動くモデルを配備した」
+  # の違いはここにある。
+  min_success_rate: 0.55     # 視覚運動方策の閉ループ成功率。ACT の生徒は
+                             # RL の教師から蒸留したもので、蒸留は必ず目減り
+                             # するので、教師の約8割に置いている。厳しいが
+                             # 届く値。
+  max_place_err: 0.035       # m。|obj_xy - target_xy| の平均
+  min_lift: 0.055            # m。ワークの最高到達高さの平均（= lifted_thresh）。
+                             # 「そもそも持ち上げていない」を捕まえる
+  force: false               # true = それでも配布物を作る（使うときは理由を
+                             # どこかに残すこと）
 
 video:
-  # src/record_video.py -- the submission clip.
-  # The assignment requires 1-5 minutes and says a sped-up video must say so;
-  # speed=2 puts "2x speed" on the title card. 5 stages x 26 s + 14 s of cards
-  # lands at ~2 min 30 s at 1x.
+  # src/record_video.py が作る提出動画。
+  # 課題は1〜5分を要求し、倍速なら動画内に明記することとしている。
+  # speed=2 にするとタイトルカードに倍速の表記が入る。5段 x 26秒 +
+  # カード14秒で、1倍速なら約2分30秒になる。
   seconds_per_policy: 26.0
   speed: 1
   out: artifacts/video/pickplace_demo.mp4

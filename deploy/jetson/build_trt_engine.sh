@@ -1,14 +1,14 @@
 #!/bin/bash
 # =====================================================================
-# ONNX -> TensorRT engine build on the Jetson Orin Nano (JetPack 6.x).
-# trtexec ships with TensorRT at /usr/src/tensorrt/bin/trtexec.
+# ONNX -> TensorRT エンジンのビルド（Jetson Orin Nano、JetPack 6.x）。
+# trtexec は TensorRT 付属で、/usr/src/tensorrt/bin/trtexec にある。
 #
-#   bash build_trt_engine.sh ~/edge_bundle            # ACT (default)
-#   bash build_trt_engine.sh ~/edge_bundle diffusion  # DP encoder+denoiser
+#   bash build_trt_engine.sh ~/edge_bundle            # ACT（既定）
+#   bash build_trt_engine.sh ~/edge_bundle diffusion  # DP のエンコーダ+デノイザ
 #
-# FP16 halves latency on the Orin Nano with negligible accuracy loss for
-# these policies (validate afterwards: policy_runtime prints latency, and
-# operations guide ch.2 step 7 includes a hold-out comparison vs ORT).
+# FP16 は Orin Nano で遅延を半分にし、この種の方策では精度の劣化は
+# 無視できる。あとで必ず検証すること（policy_runtime が遅延を表示し、
+# ORT との保留データでの比較も手順に入れてある）。
 # =====================================================================
 set -euo pipefail
 BUNDLE="${1:?usage: build_trt_engine.sh <edge_bundle_dir> [diffusion]}"

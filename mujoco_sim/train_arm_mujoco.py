@@ -1,24 +1,24 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 -- the single simulator entry point.
+"""ARM_BCRL006。シミュレータの唯一の入口。
 
-One file, one environment, six modes -- the same structure
-``mujoco_sim/train_arm_mujoco.py`` had in ARM_BCRL005, so the pipeline scripts
-in ``src/`` drive this the way they drove that:
+1ファイル、1環境、6モード。ARM_BCRL005 の
+``mujoco_sim/train_arm_mujoco.py`` と同じ構造なので、``src/`` の
+パイプラインスクリプトは当時と同じやり方でこれを叩く:
 
-    --mode collect     phase 1    scripted IK expert -> demonstrations
-    --mode mimicgen    phase 1.5  warp them onto new scenes, keep successes
-    --mode eval_only   phase 4/9  closed-loop evaluation of a baseline or ONNX
-    --mode rl          phase 6    PPO fine-tuning from the BC weights
-    --mode distill     phase 7    RL champion re-collects camera demos
-    --mode play        --         watch it, or record the report video
+    --mode collect     フェーズ1    スクリプトIKエキスパート -> デモ
+    --mode mimicgen    フェーズ1.5  新しいシーンへ転写し、成功を残す
+    --mode eval_only   フェーズ4/9  ベースラインか ONNX の閉ループ評価
+    --mode rl          フェーズ6    BC の重みからの PPO 微調整
+    --mode distill     フェーズ7    RL優勝方策がカメラ付きデモを再収集
+    --mode play        --           動きを見る、または動画を録る
 
-Everything is CPU-side MuJoCo; only the learning phases touch the GPU.
+すべてCPU側の MuJoCo。GPUを使うのは学習フェーズだけ。
 
-SHARDING (``--shard i --num_shards N``): the camera-bearing modes are limited
-by the graphics stack, not by physics, and rendering is embarrassingly
-parallel. ``src/collect_data.py`` and ``src/distill_collect.py`` launch N of
-these processes -- each with its own model, data and GL context -- and merge
-the shards. A shard offsets the seed, so the union is still one i.i.d. sample.
+分割（``--shard i --num_shards N``）。カメラを使うモードは物理ではなく
+グラフィックスで律速され、描画は素直に並列化できる。
+``src/collect_data.py`` と ``src/distill_collect.py`` が、それぞれ自分の
+モデル、データ、GLコンテキストを持つプロセスをN個立て、分割結果を
+結合する。シャードはシードをずらすので、和集合は1つの独立同分布の標本。
 
 Usage:
     python mujoco_sim/train_arm_mujoco.py --mode collect --num_envs 32 \
@@ -95,26 +95,26 @@ _cfg = _load_cfg()
 from mujoco_sim.env import MuJoCoPickPlaceEnv, ACT_DIM  # noqa: E402
 from mujoco_sim.policies import ExpertController, OnnxPolicy  # noqa: E402
 
-# Wrist camera: recorded during collect / mimicgen / distill, shown during
-# play, and needed when evaluating an IMAGE policy. Everything else is
-# render-free, which is what keeps the state-only phases fast -- rendering,
-# not physics, is this pipeline's bottleneck.
+# 手首カメラ。collect / mimicgen / distill の間は記録し、play の間は
+# 表示し、画像方策を評価するときにも必要。それ以外は描画しない。
+# だから状態だけのフェーズは速い。律速は物理ではなく描画で、
+# このパイプラインでは一貫してそこが効く。
 def _needs_camera() -> bool:
     if args_cli.mode in ("distill", "play"):
-        return True                 # distillation EXISTS to produce frames
+        return True                 # 蒸留は画像を作るために存在する
     if args_cli.mode in ("collect", "mimicgen"):
-        # collect.camera=false skips rendering entirely. The image-quality gate
-        # and the visuomotor stage need frames, so the full pipeline leaves it
-        # on -- but the 2x2 study measures a STATE policy, and rendering there
-        # would cost 20x the wall clock for pixels nothing reads.
+        # collect.camera=false なら描画を完全に飛ばす。画質ゲートと視覚運動
+        # 段は画像が要るので、フル実行では有効にしておく。ただし 2x2 の比較が
+        # 測るのは状態方策で、そこで描画すると、誰も読まない画素のために
+        # 実時間が20倍になる。
         return bool(_cfg.collect.get("camera", True))
     if args_cli.mode == "eval_only" and args_cli.baseline == "checkpoint" \
             and args_cli.onnx_path:
         import onnxruntime as _ort
         names = [i.name for i in _ort.InferenceSession(
             args_cli.onnx_path, providers=["CPUExecutionProvider"]).get_inputs()]
-        # ask the GRAPH, not the file name: an ONNX that declares an "rgb"
-        # input needs frames, and nothing else does
+        # 判断はファイル名ではなくグラフに聞く。"rgb" 入力を宣言している
+        # ONNX は画像が必要で、それ以外は不要
         return "rgb" in names
     return False
 
@@ -138,27 +138,27 @@ def _make_env(num_envs: int | None = None, camera: bool | None = None):
 
 
 # ---------------------------------------------------------------------------
-# closed-loop evaluation (one loop; stateful policies get their reset hook
-# called on episode boundaries)
+# 閉ループ評価（ループは1つ。状態を持つ方策は、エピソードの切れ目で
+# リセットのフックを呼んでもらう）
 # ---------------------------------------------------------------------------
 @torch.inference_mode()
 def evaluate_policy(env, act_fn, episodes: int, max_steps: int, reset_hook=None,
                     seed: int | None = None) -> dict:
-    """Run the policy in closed loop and report what a reviewer needs to know.
+    """方策を閉ループで走らせ、査読者が知る必要のあることを報告する。
 
-    Metrics: success_rate, time_to_success (successful episodes only),
-    mean_max_lift (peak block height -- partial progress, so a policy that
-    grasps but never places is distinguishable from one that never touches the
-    block), mean_place_err, mean_reward, and the safety telemetry
-    (mean/worst min_tool_z: how close the tool actually got to the bench).
+    指標は success_rate、time_to_success（成功したエピソードのみ）、
+    mean_max_lift（ワークの最高到達高さ。途中までの進捗が分かるので、
+    掴むが置けない方策と、触りもしない方策を区別できる）、
+    mean_place_err、mean_reward、それに安全系のテレメトリ
+    （min_tool_z の平均と最悪値。ツールが実際に台へどれだけ近づいたか）。
     """
     n = env.num_envs
-    # ``seed`` makes the battery REPRODUCIBLE: the checkpoint sweep passes a
-    # fixed one so every candidate is judged on the same scenes (a paired
-    # comparison -- the variance between checkpoints is then the difference
-    # between policies, not between episode draws), and the final measurement
-    # passes a different one so it is an INDEPENDENT re-estimate of the winner
-    # rather than the number the winner was selected by.
+    # ``seed`` が評価を再現可能にする。チェックポイントの総当たりは
+    # 固定値を渡すので、どの候補も同じシーンで判定される（対応のある
+    # 比較。チェックポイント間のばらつきは方策の差であって、エピソードの
+    # 引きの差ではない）。最終測定は別の値を渡すので、優勝者を選んだ
+    # 数値ではなく、優勝者の独立な再推定になる。そこを分けないと、
+    # 選んだ基準で自分を褒めることになる。
     obs = env.reset(seed=seed)[0]["policy"]
     if reset_hook is not None:
         reset_hook.reset_idx(torch.arange(n))
@@ -175,8 +175,8 @@ def evaluate_policy(env, act_fn, episodes: int, max_steps: int, reset_hook=None,
         ret += rew.cpu()
         done_ids = (term | trunc).nonzero(as_tuple=False).flatten()
         for i in done_ids.tolist():
-            # `term` from env.step() itself, never a fresh is_success(): the
-            # auto-reset already replaced the terminal state
+            # `term` は env.step() が返したものを使い、新しく is_success() を
+            # 呼ばない。自動リセットが終端状態をすでに置き換えている
             recs["success"].append(float(bool(term[i])))
             recs["steps"].append(float(steps[i]))
             recs["lift"].append(float(env.final_max_obj_z[i]))
@@ -204,15 +204,15 @@ def evaluate_policy(env, act_fn, episodes: int, max_steps: int, reset_hook=None,
         "mean_max_lift": float(_arr("lift").mean()),
         "mean_place_err": float(perr.mean()) if len(perr) else float("nan"),
         "mean_reward": float(_arr("reward").mean()),
-        # mean_min_tool_z well above env.floor.clearance means the policy is
-        # NOT relying on the guard; a value pinned at the plane means it is.
+        # mean_min_tool_z が env.floor.clearance より十分上なら、方策は
+        # ガードに頼っていない。面に張り付いていれば頼っている。
         "mean_min_tool_z": float(tz.mean()) if len(tz) else float("nan"),
         "worst_min_tool_z": float(tz.min()) if len(tz) else float("nan"),
     }
 
 
 # ---------------------------------------------------------------------------
-# collect (phase 1) & distill (phase 7) share one recording loop
+# collect（フェーズ1）と distill（フェーズ7）は記録ループを共有する
 # ---------------------------------------------------------------------------
 def _record_rollouts(env, act_fn, reset_hook, episodes_target: int, noise: float,
                      novice_ratio: float, keep_failed: bool, out_name: str,
@@ -233,10 +233,10 @@ def _record_rollouts(env, act_fn, reset_hook, episodes_target: int, noise: float
     step = 0
     while n_traj < episodes_target and step < max_steps:
         clean = act_fn(obs)
-        # DART-style: execute noisy, label clean. The policy then sees states
-        # a perfect demonstrator never visits, together with the action that
-        # recovers from them -- the single cheapest fix for BC's compounding
-        # error, and it costs one extra line.
+        # DART流。ノイズを足して実行し、ラベルは綺麗な行動。方策は、完璧な
+        # 教師が絶対に通らない状態と、そこから復帰する行動を一緒に見る。
+        # BC の誤差蓄積に対していちばん安い対処で、増えるコードは1行だけ。
+        # 効果の割に安い。
         exec_a = torch.clamp(clean + torch.randn_like(clean) * noise, -1, 1) \
             if noise > 0 else clean
         if novice_ratio > 0:
@@ -280,7 +280,7 @@ def _record_rollouts(env, act_fn, reset_hook, episodes_target: int, noise: float
         demos["rgb"] = kept_rgb
     final = os.path.join(DATA_DIR, out_name)
     tmp = final + ".tmp"
-    torch.save(demos, tmp)          # atomic: never leave a half-written archive
+    torch.save(demos, tmp)          # 不可分に書く。書き途中のアーカイブを残さない
     os.replace(tmp, final)
 
     summary = {
@@ -296,7 +296,7 @@ def _record_rollouts(env, act_fn, reset_hook, episodes_target: int, noise: float
 
 
 def _shard_names(base: str) -> tuple[str, str]:
-    """collect/distill write one file per shard; src/ merges them."""
+    """collect/distill はシャードごとに1ファイル書き、src/ が結合する。"""
     stem = base[:-3] if base.endswith(".pt") else base
     if int(args_cli.num_shards) <= 1:
         return f"{stem}.pt", f"{stem}_summary.json"
@@ -331,10 +331,10 @@ def _find_teacher_onnx() -> str | None:
 
 
 def run_distill() -> None:
-    """Teacher-student data generation: the RL champion (a STATE policy that
-    reads object poses -- information only the simulator has) demonstrates with
-    the wrist camera on; the recorded (rgb, qpos) -> action pairs train the
-    deployable visuomotor policy, which needs no object pose at runtime."""
+    """教師生徒のデータ生成。RL の優勝方策（シミュレータしか知らない
+    物体姿勢を読む状態方策）が手首カメラONで実演し、記録した
+    (rgb, qpos) -> 行動 の対が、配備できる視覚運動方策を学習させる。
+    その方策は実行時に物体姿勢を必要としない。"""
     d = _cfg.visuomotor.distill
     env = _make_env(int(d.num_envs), True)
     teacher_path = _find_teacher_onnx()
@@ -363,7 +363,7 @@ def run_distill() -> None:
 
 
 # ---------------------------------------------------------------------------
-# mimicgen (phase 1.5)
+# mimicgen（フェーズ1.5）
 # ---------------------------------------------------------------------------
 def run_mimicgen() -> None:
     from mimicgen.generation import DataGenInfoPool, TrajectoryGenerator
@@ -381,10 +381,10 @@ def run_mimicgen() -> None:
     print(f"[mimicgen] shard {args_cli.shard}: pool of {len(pool.episodes)} annotated "
           f"demos, {pool.num_subtasks} subtasks, selection={mg.selection}", flush=True)
 
-    # Camera follows mimicgen.camera (default OFF, forwarded by
-    # src/mimicgen_generate.py as collect.camera). Generated demos feed the
-    # STATE policy; rendering them would add gigabytes for pixels nothing
-    # reads. Hardcoding True here cost one run of the full pipeline.
+    # カメラは mimicgen.camera に従う（既定OFF。
+    # src/mimicgen_generate.py が collect.camera として渡す）。生成デモが
+    # 養うのは状態方策で、描画すると誰も読まない画素をギガバイト単位で
+    # 積むことになる。ここを True に固定していて、フル実行1本を無駄にした。
     env = _make_env(int(mg.num_envs), CAMERA_ON)
     kin = env.tool_kin
     from arm_common.ik import DLSPositionIK
@@ -396,8 +396,8 @@ def run_mimicgen() -> None:
     env.reset()
 
     while n_attempt < attempts_target:
-        # one generation attempt per environment, executed in parallel: plan
-        # the whole episode for every env, then step them together.
+        # 環境1つにつき生成の試行1回を並列で実行する。全環境ぶんエピソード
+        # 全体を計画してから、まとめてステップする。
         plans = []
         for i in range(env.num_envs):
             obj = env.obj_pos_env()[i].numpy().astype(np.float64)
@@ -441,7 +441,7 @@ def run_mimicgen() -> None:
                     continue
                 alive[i] = False
                 n_attempt += 1
-                if bool(term[i]):               # the env's OWN success term
+                if bool(term[i]):               # 環境自身の成功判定
                     n_success += 1
                     kept_o.append(torch.stack(cur_o[i]))
                     kept_a.append(torch.stack(cur_a[i]))
@@ -449,7 +449,7 @@ def run_mimicgen() -> None:
                         kept_rgb.append(torch.stack(cur_r[i]))
             if not alive.any():
                 break
-        for i in range(env.num_envs):           # unfinished attempts count as failures
+        for i in range(env.num_envs):           # 終わらなかった試行は失敗として数える
             if alive[i]:
                 n_attempt += 1
         env.reset()

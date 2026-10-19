@@ -1,17 +1,17 @@
 #!/bin/bash
 # =====================================================================
-# ARM_BCRL006 environment -- one local PC, one virtualenv, ~10 minutes.
+# ARM_BCRL006 の環境構築。ローカルPC 1台、venv 1つ、約10分。
 #
-# ARM_BCRL005 needed a rented GPU server, a 20 GB Isaac Sim container and a
-# pinned Isaac Lab build. This needs Python and a graphics library that
-# already exists on the machine. That is the whole point of the MuJoCo port:
-# the cost of one PDCA cycle dropped from "book a server" to "run a command",
-# and that is what made the 4-condition study in run_ablation.sh affordable.
+# ARM_BCRL005 はレンタルGPUサーバーと20GBの Isaac Sim コンテナ、版を固定した
+# Isaac Lab が必要だった。こちらは Python と、マシンに既にあるグラフィックス
+# ライブラリだけで済む。MuJoCo へ移した狙いはそこで、PDCA 1周のコストが
+# 「サーバーを予約する」から「コマンドを1つ流す」に下がった。それで
+# run_ablation.sh の4条件比較が現実的な値段になった。
 #
-#   bash setup_env.sh              # create the venv and install everything
-#   bash setup_env.sh --check      # verify an existing install, install nothing
+#   bash setup_env.sh              # venv を作って全部入れる
+#   bash setup_env.sh --check      # 既存環境の検証だけ。何もインストールしない
 #
-# After it finishes:
+# 終わったら:
 #   source ~/.venvs/arm_bcrl006/bin/activate
 #   bash run_all.sh
 # =====================================================================
@@ -27,11 +27,11 @@ say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 # ---------------------------------------------------------------------
 say "1/6  system packages (offscreen OpenGL for MuJoCo)"
-# MuJoCo renders the wrist camera offscreen. osmesa is the software backend:
-# no display server, no driver EGL stack, so it works the same over SSH, in a
-# container and under WSL2 -- which is where the other two backends usually
-# break. On this project's reference machine all three measure within 20 %
-# anyway, because the bottleneck is the per-frame read-back.
+# MuJoCo は手首カメラをオフスクリーンで描画する。osmesa はソフトウェア
+# バックエンドで、ディスプレイサーバもドライバのEGLスタックも要らない。
+# SSH越し、コンテナ内、WSL2 でも同じに動く。他の2つはそこで壊れやすい。
+# 基準機では3つとも差は20%以内だった。律速がフレームごとの読み戻し
+# だからで、描画そのものではない。
 MISSING=""
 for lib in libOSMesa.so.8 libEGL.so.1 libGL.so.1; do
   ldconfig -p 2>/dev/null | grep -q "$lib" || MISSING="$MISSING $lib"
@@ -49,7 +49,7 @@ fi
 say "2/6  Python $PYVER virtualenv at $VENV"
 if [ ! -d "$VENV" ]; then
   [ "$CHECK_ONLY" = 1 ] && { echo "missing (run without --check)"; exit 1; }
-  # uv if available (fast, and it can fetch the interpreter itself), else venv
+  # uv があれば使う（速いし、インタプリタ自体も取ってこれる）。無ければ venv
   if command -v uv >/dev/null 2>&1; then
     uv venv --python "$PYVER" "$VENV"
   else
@@ -64,11 +64,11 @@ echo "interpreter: $($PY -V)  ($PY)"
 
 # ---------------------------------------------------------------------
 say "3/6  PyTorch"
-# PIN THE CUDA BUILD TO THE INSTALLED DRIVER. PyPI's default wheel tracks the
-# newest CUDA, and a wheel newer than the driver reports
-# "CUDA initialization: The NVIDIA driver on your system is too old" and falls
-# back to CPU -- silently, and only when you look. The driver is fine; the
-# wheel was wrong. Read the driver's CUDA version and pick the matching index.
+# CUDAビルドを、入っているドライバに合わせて固定する。PyPI の既定ホイールは
+# 最新CUDAに追従するので、ドライバより新しいホイールを入れると
+# 「CUDA initialization: The NVIDIA driver on your system is too old」と出て
+# CPUに落ちる。黙って落ちるので、見に行くまで気づかない。悪いのはドライバ
+# ではなくホイール。ドライバのCUDA版を読んで、合う索引を選ぶ。
 if [ "$CHECK_ONLY" = 0 ]; then
   CUDA_VER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
   DRV_CUDA=$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p' | head -1 || true)
@@ -94,22 +94,22 @@ if [ "$CHECK_ONLY" = 0 ]; then
     "onnx" "onnxruntime" \
     "h5py" "numpy<3" "matplotlib" "imageio[ffmpeg]" "pillow" \
     "termcolor" "tqdm" "psutil"
-  # robomimic WITHOUT its dependency list. Its `egl_probe` requirement is a
-  # CMake C extension whose only job is picking a GPU for robosuite's offscreen
-  # renderer -- machinery this project never touches (rollout evaluation is
-  # disabled; closed-loop evaluation is src/evaluate.py, in MuJoCo). It fails
-  # to build on a machine without EGL development headers, which would
-  # otherwise block the whole install for a feature we do not use. Every real
-  # runtime dependency is installed above, explicitly.
+  # robomimic を依存リスト抜きで入れる。依存に入っている `egl_probe` は
+  # CMake の C 拡張で、仕事は robosuite のオフスクリーン描画用に GPU を
+  # 選ぶことだけ。このプロジェクトでは一切使わない（ロールアウト評価は
+  # 無効、閉ループ評価は src/evaluate.py が MuJoCo 上で行う）。しかも EGL の
+  # 開発ヘッダが無いマシンではビルドに失敗するので、使わない機能のせいで
+  # 環境構築全体が止まる。実行時に本当に必要な依存は、上で明示的に
+  # 入れてある。
   $PIP install --no-deps robomimic
 fi
 
 # ---------------------------------------------------------------------
 say "5/6  ImageNet weights for the ACT backbone (cache them now, offline later)"
-# ARM_BCRL002 shipped a visuomotor policy whose ResNet18 had fallen back to
-# random weights because the torch hub was unreachable, and every metric in the
-# pipeline still looked fine. configs/visuomotor/act.yaml now REFUSES to train
-# without them; caching here is what keeps that from being an obstacle.
+# ARM_BCRL002 では torch hub に届かず ResNet18 がランダム初期化のままの
+# 視覚運動方策を出荷してしまい、それでもパイプラインの指標は全部正常に見えた。
+# 今は configs/visuomotor/act.yaml が重み無しでの学習を拒否する。ここで
+# キャッシュしておけば、その拒否が作業の邪魔にならない。
 $PY - <<'PYEOF'
 try:
     import torchvision as tv
@@ -124,22 +124,22 @@ PYEOF
 # ---------------------------------------------------------------------
 say "6/6  self-tests (no simulator state, no GPU needed)"
 export PWD="$(pwd)"
-$PY deploy/raspi/mycobot_fk.py          # kinematics + tool geometry + floor guard
-$PY deploy/raspi/safety.py              # rate limit, virtual floor, impact stop
-$PY arm_common/ik.py                    # analytic Jacobian + damped least squares
-$PY mimicgen/pose_np.py                 # quaternion/pose primitives
-$PY mimicgen/annotate.py                # subtask segmentation
-$PY mimicgen/generation.py              # eq. 1, interpolation, source selection
-$PY assets/build_mycobot_mjcf.py --verify   # MJCF FK == mycobot_fk.py
+$PY deploy/raspi/mycobot_fk.py          # 運動学 + ツール形状 + 床ガード
+$PY deploy/raspi/safety.py              # レート制限、仮想床、衝突停止
+$PY arm_common/ik.py                    # 解析ヤコビアン + 減衰最小二乗
+$PY mimicgen/pose_np.py                 # クォータニオンと姿勢の基本演算
+$PY mimicgen/annotate.py                # サブタスク分割
+$PY mimicgen/generation.py              # 式1、補間、ソース選択
+$PY assets/build_mycobot_mjcf.py --verify   # MJCF の FK == mycobot_fk.py
 $PY -m pytest tests -q || echo "(pytest not installed: pip install pytest)"
 
 cat <<EOF
 
 Ready.
   source $VENV/bin/activate
-  bash run_all.sh          # the 11-phase pipeline
-  bash run_ablation.sh     # the 2x2 study
-  python mujoco_sim/train_arm_mujoco.py --mode play    # watch it
+  bash run_all.sh          # 11フェーズのパイプライン
+  bash run_ablation.sh     # 2x2 の比較実験
+  python mujoco_sim/train_arm_mujoco.py --mode play    # 動きを見る
 
 Everything is local: MLflow on a SQLite file, W&B offline, TensorBoard on the
 event files. No account and no network are required at any point.

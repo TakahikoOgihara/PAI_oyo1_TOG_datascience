@@ -1,37 +1,37 @@
 # -*- coding: utf-8 -*-
-"""myCobot 280 Pi bridge server -- runs ON the arm's Raspberry Pi 4B.
+"""myCobot 280 Pi のブリッジサーバ。アームの Raspberry Pi 4B の上で走る。
 
-The Jetson Orin Nano (policy side) talks to this server over a plain LAN
-cable using newline-delimited JSON over TCP (default port 9000). This keeps
-the Pi's job minimal and safe: it owns the serial link to the servos and
-enforces the SAME control contract the policy was trained with in Isaac Lab:
+Jetson Orin Nano（方策側）は、素のLANケーブル越しに TCP の改行区切り
+JSON（既定ポート9000）でこのサーバと話す。これで Pi の仕事は最小で
+安全なものに保てる。Pi はサーボへのシリアルを持ち、方策が学習時に
+使っていたのと同じ制御の契約を強制する:
 
-  * joint-position DELTA commands, integrated into a target that may lead the
-    MEASURED joints by at most 3 * action_scale (the anti-windup bound
-    verified in simulation -- mujoco_sim/train_arm_mujoco.py _pre_physics_step)
-  * hard joint-limit clamping (the official URDF's limits)
-  * binary gripper open/close (pymycobot set_gripper_value), with the same
-    settle time the simulator's GRASP/RELEASE phases hold still for
-  * the ARM_BCRL006 SAFETY LAYER (safety.py): per-tick rate limit, virtual
-    floor plane from forward kinematics, and an impact stop -- all three
-    independent of the policy, all three enforced here because this is the
-    machine that owns the servos (field-failure notes §4)
+  * 関節位置の差分指令。積分した目標が実測の関節より先行できるのは
+    最大 3 * action_scale まで（シミュレータで検証したアンチワインド
+    アップの境界。mujoco_sim/train_arm_mujoco.py の _pre_physics_step）
+  * 関節の可動限界で固くクランプする（公式 URDF の限界値）
+  * 2値のグリッパ開閉（pymycobot の set_gripper_value）。シミュレータの
+    GRASP/RELEASE が静止している時間と同じ整定時間を取る
+  * ARM_BCRL006 の安全層（safety.py）。刻みごとのレート制限、順運動学
+    から作る仮想床、衝突停止。3つとも方策から独立で、3つともここで
+    強制する。サーボを持っている機械がここだから
+    （実機の失敗記録を参照）
 
-Every reply carries a "safety" block, so the Jetson runtime and the operator
-console always see why the arm stopped.
+どの応答にも "safety" のブロックが付くので、Jetson のランタイムと
+操作コンソールは、アームが止まった理由を常に見られる。
 
-Protocol (one JSON object per line; every reply carries "ok"):
+プロトコル（1行に JSON 1つ。どの応答にも "ok" が付く）:
   {"cmd":"state"}                          -> {"ok":1,"q":[6 rad],"grip":0|1,...}
   {"cmd":"deltas","d":[6 in -1..1],"grip":-1..1}
-                                           -> apply one 20 Hz control tick
-  {"cmd":"send_q","q":[6 rad],"speed":30}  -> absolute move (jog/home)
+                                           -> 20Hz の制御刻みを1回適用する
+  {"cmd":"send_q","q":[6 rad],"speed":30}  -> 絶対位置で動かす（ジョグ/原点復帰）
   {"cmd":"gripper","open":true|false}
-  {"cmd":"home"}                           -> the training "ready" pose
-  {"cmd":"stop"}                           -> hold current position
-  {"cmd":"safety_reset"}                   -> clear a latched safety stop
-  {"cmd":"release"}                        -> torque off (manual repositioning)
+  {"cmd":"home"}                           -> 学習時の "ready" 姿勢へ
+  {"cmd":"stop"}                           -> 現在位置で保持
+  {"cmd":"safety_reset"}                   -> ラッチした安全停止を解除
+  {"cmd":"release"}                        -> トルクを切る（手で動かす）
 
-Run (on the Pi, after `pip3 install pymycobot`):
+実行（Pi 上で `pip3 install pymycobot` のあと）:
   python3 mycobot_bridge_server.py --port 9000 --edge-config ~/edge_bundle/edge_config.json
 """
 
@@ -46,25 +46,25 @@ import time
 from mycobot_fk import HOME_Q, Q_LIMITS, tcp_pos, tool_min_z
 from safety import SafetyLayer, from_edge_config
 
-# ---- control contract (defaults; edge_config.json overrides them) ----------
-ACTION_SCALE = 0.05          # rad per control tick per unit action
-LEAD = 3.0 * ACTION_SCALE    # anti-windup bound (rad)
+# ---- 制御の契約（既定値。edge_config.json が上書きする） ------------------
+ACTION_SCALE = 0.05          # 単位行動あたり、1制御刻みの rad
+LEAD = 3.0 * ACTION_SCALE    # アンチワインドアップの境界（rad）
 CONTROL_DT = 0.05            # 20 Hz
-GRIPPER_OPEN_VALUE = 100     # pymycobot set_gripper_value scale (0..100)
-GRIPPER_CLOSE_VALUE = 20     # not 0: firm-but-finite squeeze (sim recipe)
+GRIPPER_OPEN_VALUE = 100     # pymycobot の set_gripper_value の尺度（0..100）
+GRIPPER_CLOSE_VALUE = 20     # 0 にしない。しっかりだが有限の握り（シミュレータの処方）
 GRIPPER_SPEED = 70
-MOVE_SPEED = 40              # pymycobot speed for absolute moves
-# The simulator holds the arm STILL while the gripper travels (expert
-# grasp_steps=15 / release_steps=10 at 20 Hz). The real adaptive gripper needs
-# a comparable amount of time, and the policy does not wait for it, so the
-# bridge does: without this the arm keeps moving mid-close and knocks the
-# block away (field-failure notes §2, cause F).
+MOVE_SPEED = 40              # 絶対移動での pymycobot の速度
+# シミュレータはグリッパが動く間アームを静止させる（エキスパートの
+# grasp_steps=15 / release_steps=10、20Hz）。実物の適応グリッパにも
+# 同じくらいの時間が必要で、方策はそれを待たない。だからブリッジが
+# 待つ。これが無いと閉じ途中でアームが動き続け、ワークを弾き飛ばす
+# （実機の失敗記録の原因F）。
 GRIPPER_SETTLE_S = 0.75
-HOME_TOL = 0.05              # rad, per joint, for "is the arm actually homed?"
+HOME_TOL = 0.05              # rad。関節ごと。「アームは本当に原点復帰したか」の判定に使う
 
 
 def _connect_robot(port: str, baud: int):
-    """pymycobot's class name moved across versions -- try both."""
+    """pymycobot のクラス名は版をまたいで変わった。両方試す。"""
     try:
         from pymycobot import MyCobot280
         return MyCobot280(port, baud)
@@ -74,9 +74,9 @@ def _connect_robot(port: str, baud: int):
 
 
 class ArmState:
-    """Single owner of the serial link. A reader refreshes the measured
-    joint angles; command methods enforce the trained control contract AND
-    the safety layer."""
+    """シリアルを唯一所有する側。読み取りが実測の関節角を更新し、
+    指令のメソッドが、学習した制御の契約と安全層の両方を
+    強制する。"""
 
     def __init__(self, port: str, baud: int, safety: SafetyLayer):
         self.mc = _connect_robot(port, baud)
@@ -85,13 +85,13 @@ class ArmState:
         self.q_meas = list(HOME_Q)
         self.meas_time = 0.0
         self.grip_open = 1
-        self.grip_until = 0.0        # arm target frozen while the gripper moves
+        self.grip_until = 0.0        # グリッパが動いている間、アームの目標は凍結する
         self.last_cmd_time = time.time()
         self._refresh()
-        # CRITICAL: the target starts at the MEASURED pose, never at HOME_Q.
-        # ARM_BCRL002 seeded it with HOME_Q, so the very first streamed tick
-        # commanded a jump from wherever the arm physically was
-        # (field-failure notes §2, cause A).
+        # 重要。目標は実測の姿勢から始める。HOME_Q からは絶対に始めない。
+        # ARM_BCRL002 は HOME_Q を初期値にしていたので、最初の1刻みで
+        # アームが物理的にいた場所からの飛びを指令していた
+        # （実機の失敗記録の原因A）。
         self.q_target = list(self.q_meas)
 
     def _refresh(self) -> None:
@@ -109,9 +109,9 @@ class ArmState:
         while True:
             self._refresh()
             tick += 1
-            # optional SECOND impact trigger, polled at 4 Hz so it never
-            # competes with the 20 Hz command stream for the serial link.
-            # Firmware without get_servo_currents simply never arms it.
+            # 任意の2つ目の衝突トリガ。4Hz で見るので、20Hz の指令ストリームと
+            # シリアルを取り合うことはない。get_servo_currents が無い
+            # ファームウェアでは、単に一度も作動しない。
             if self.safety.current_limit_ma and tick % 5 == 0:
                 with self.lock:
                     try:
@@ -139,20 +139,20 @@ class ArmState:
         return all(abs(a - b) < HOME_TOL for a, b in zip(self.q_meas, HOME_Q))
 
     def deltas(self, d: list, grip: float) -> dict:
-        """One 20 Hz control tick: policy deltas -> safe joint targets."""
+        """20Hz の制御刻み1回。方策の差分 -> 安全な関節目標。"""
         self.last_cmd_time = time.time()
         want_open = 1 if float(grip) > 0 else 0
         if want_open != self.grip_open:
             self._set_gripper(want_open)
 
         if time.time() < self.grip_until:
-            # gripper in motion: hold the arm exactly where it is, like the
-            # simulator's GRASP/RELEASE phases do
+            # グリッパが動いている間は、シミュレータの GRASP/RELEASE と同じく
+            # アームをその場に保持する
             self._send(self.q_target)
             return {"ok": 1, "q_target": self.q_target, "holding": "gripper",
                     "safety": self.safety.status()}
 
-        # 1) the trained contract: bounded-lead delta integration
+        # 1) 学習した契約。先行量を抑えた差分の積分
         cmd = []
         for i in range(6):
             t = self.q_target[i] + max(-1.0, min(1.0, float(d[i]))) * ACTION_SCALE
@@ -160,7 +160,7 @@ class ArmState:
             lo, hi = Q_LIMITS[i]
             cmd.append(max(lo, min(hi, t)))
 
-        # 2) the safety layer: rate limit -> virtual floor -> impact stop
+        # 2) 安全層。レート制限 -> 仮想床 -> 衝突停止
         q_safe, allowed = self.safety.apply(self.q_meas, self.q_target, cmd,
                                             self.meas_age())
         self.q_target = list(q_safe)
@@ -170,8 +170,8 @@ class ArmState:
 
     def _send(self, q: list, speed: int = MOVE_SPEED) -> None:
         with self.lock:
-            # send_radians tracks the 20 Hz stream; the servo's own position
-            # loop does the fine interpolation
+            # send_radians が 20Hz のストリームに追従する。細かい補間は
+            # サーボ自身の位置ループがやる
             self.mc.send_radians(q, int(speed))
 
     def _set_gripper(self, open_: int) -> None:
@@ -185,8 +185,8 @@ class ArmState:
                 print(f"[bridge] gripper command failed: {e}")
 
     def send_q(self, q: list, speed: int) -> dict:
-        """Absolute move (jog / home). Still floor-guarded -- a mistyped jog
-        must not be able to drive the tool through the desk either."""
+        """絶対移動（ジョグ／原点復帰）。これも床ガードを通す。打ち間違えた
+        ジョグで、ツールが机を突き抜けられてはいけない。"""
         self.last_cmd_time = time.time()
         q = [max(lo, min(hi, float(v))) for v, (lo, hi) in zip(q, Q_LIMITS)]
         q, blocked = self.safety.guard.limit(self.q_meas, q)
@@ -196,9 +196,9 @@ class ArmState:
                 "safety": self.safety.status()}
 
     def home(self) -> dict:
-        """Move to the training 'ready' pose. Homing is what puts the robot
-        back INSIDE the state distribution the policy was trained on, so the
-        Jetson runtime refuses to start the policy until this succeeded."""
+        """学習時の 'ready' 姿勢へ動かす。原点復帰は、ロボットを方策が
+        学習した状態分布の中へ戻す操作。だから Jetson のランタイムは、
+        これが成功するまで方策の起動を拒否する。"""
         self.safety.reset()
         rep = self.send_q(list(HOME_Q), MOVE_SPEED)
         rep["homed"] = self.is_homed()

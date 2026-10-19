@@ -1,19 +1,19 @@
-# Policy-independent safety layer for the real robot (deploy/raspi/safety.py).
-# Unchanged from ARM_BCRL005: the simulator enforces the SAME envelope through
-# the SAME forward kinematics (deploy/raspi/mycobot_fk.py), so what the policy
-# learns is what the hardware runs. src/infer.py ships this block inside
-# edge_config.json -- no constant is ever hand-copied onto the robot.
-max_joint_step: 0.10      # rad per 20 Hz tick, per joint
-floor_z: 0.0              # bench top in the robot base frame. 0 = arm bolted
-                          # flat on the bench; MEASURE it if it sits on a riser
-floor_clearance: 0.005    # 5 mm. The expert grasp pose clears the plane by
-                          # 13 mm, so the guard never fires in normal operation
-stall_err: 0.10           # rad of tracking error that counts as "blocked"
-stall_ticks: 8            # consecutive ticks (8 * 0.05 s = 0.4 s) before the
-                          # latching stop fires
-retreat_rad: 0.05         # back off this much AGAINST the push on latching
-stale_s: 0.5              # refuse to stream if the encoders have not reported
+# 実機用の、方策に依存しない安全層（deploy/raspi/safety.py）。
+# ARM_BCRL005 から変更なし。シミュレータは同じ順運動学
+# （deploy/raspi/mycobot_fk.py）で同じ包絡を強制するので、方策が学んだ
+# ものがそのまま実機で動く。src/infer.py がこのブロックを
+# edge_config.json に入れて出荷する。定数を手でロボットに写すことはない。
+max_joint_step: 0.10      # 20Hzの1刻みあたり、関節ごとの rad
+floor_z: 0.0              # ロボット基準座標での台の上面。0 = アームを台に
+                          # 直接ボルト止め。下駄を履かせたら必ず実測すること
+floor_clearance: 0.005    # 5mm。エキスパートの把持姿勢は面から13mm空いて
+                          # いるので、通常運転でこのガードは発火しない
+stall_err: 0.10           # 「詰まった」と見なす追従誤差の rad
+stall_ticks: 8            # ラッチ停止が出るまでの連続刻み数
+                          # （8 * 0.05秒 = 0.4秒）
+retreat_rad: 0.05         # ラッチ時に、押された向きと逆にこれだけ退避する
+stale_s: 0.5              # エンコーダが報告しない間はストリームを拒否する
 current_limit_ma: 0
-require_home_before_start: true   # Start homes to the training ready pose and
-                                  # refuses to run if homing did not reach it
-home_tolerance_rad: 0.05          # per joint
+require_home_before_start: true   # 起動時に学習時の ready 姿勢へ原点復帰し、
+                                  # 届かなければ実行を拒否する
+home_tolerance_rad: 0.05          # 関節ごと

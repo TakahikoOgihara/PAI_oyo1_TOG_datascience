@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""ONNX export + inference-latency benchmarking.
+"""ONNX の書き出しと、推論遅延の計測。
 
-Deploying to a robot means leaving the training framework behind: the policy is
-exported to ONNX (the portable graph consumed by TensorRT / ONNX Runtime on the
-edge).  We export, numerically validate against the PyTorch reference, and
-benchmark per-inference latency for both backends so the report can quote a real
-control-loop budget.
+ロボットへ配備するとは、学習の枠組みを置いていくこと。方策は ONNX
+（エッジの TensorRT / ONNX Runtime が食う移植可能なグラフ）に書き出す。
+書き出し、PyTorch の基準実装と数値で突き合わせ、両方のバックエンドで
+1回の推論の遅延を測る。だからレポートは、実際の制御ループの予算を
+数字で言える。
 """
 
 from __future__ import annotations
@@ -15,15 +15,15 @@ import torch
 
 
 def _onnx_export(model, dummies, path: str, names: list) -> None:
-    """torch.onnx.export with a dynamic batch dim, across torch versions.
+    """動的なバッチ次元付きの torch.onnx.export を、torch の版をまたいで使う。
 
-    torch >= 2.9 defaults to the dynamo/torch.export-based exporter, which can
-    silently SPECIALIZE the batch dimension to the dummy's batch=1 even when
-    dynamic_axes is given (seen with the ACT policy: its Reshape kept a baked
-    shape {1,256,49} and any batch>1 inference failed in onnxruntime). The
-    legacy tracer handles dynamic_axes correctly, so request it explicitly;
-    older torch without the `dynamo` kwarg raises TypeError and already uses
-    the legacy path by default.
+    torch 2.9 以降は dynamo / torch.export 系の書き出しが既定で、
+    dynamic_axes を渡しても、ダミーの batch=1 にバッチ次元を黙って
+    固定してしまうことがある（ACT の方策で実際に起きた。Reshape が
+    {1,256,49} の形を焼き込み、batch>1 の推論が onnxruntime で全部
+    失敗した）。旧来のトレーサは dynamic_axes を正しく扱うので、明示的に
+    そちらを要求する。`dynamo` 引数を知らない古い torch は TypeError を
+    出すが、そちらは既定で旧来の経路を使っている。
     """
     kwargs = dict(
         input_names=names, output_names=["action"],
@@ -46,7 +46,7 @@ def export_onnx(model: torch.nn.Module, obs_dim: int, path: str,
 
 def validate_onnx(model: torch.nn.Module, obs_dim: int, path: str,
                   n: int = 256, device: str = "cpu"):
-    """Return max abs diff between torch and onnxruntime outputs."""
+    """torch と onnxruntime の出力の、最大絶対差を返す。"""
     try:
         import onnxruntime as ort
     except Exception as e:
@@ -63,7 +63,7 @@ def validate_onnx(model: torch.nn.Module, obs_dim: int, path: str,
 
 def benchmark_latency(model: torch.nn.Module, obs_dim: int, onnx_path: str | None,
                       device: str = "cpu", iters: int = 2000):
-    """Single-sample (control-loop) latency for torch and onnxruntime."""
+    """1標本（制御ループ）の遅延を、torch と onnxruntime で測る。"""
     out = {}
     model = model.eval().to(device)
     x = torch.randn(1, obs_dim, device=device)
@@ -92,18 +92,18 @@ def benchmark_latency(model: torch.nn.Module, obs_dim: int, onnx_path: str | Non
 
 
 # ---------------------------------------------------------------------------
-# ARM_BCRL001: multi-input (multimodal) variants. A visuomotor policy has more than
-# one named input -- e.g. "flat" (state+lidar vector) and "rgb" (H,W,3 image)
-# -- so export/validation/benchmark take a list of (name, shape) specs and
-# call model.forward(*tensors) in spec order. The single-input helpers above
-# stay untouched for state-only models.
+# ARM_BCRL001 で入れた多入力（マルチモーダル）版。視覚運動方策は名前付き
+# の入力を複数持つ。たとえば "flat"（状態+LiDARのベクトル）と
+# "rgb"（H,W,3 の画像）。だから書き出し／検証／計測は (name, shape) の
+# リストを取り、その順で model.forward(*tensors) を呼ぶ。上の単入力の
+# 補助関数は、状態だけのモデル用にそのまま残してある。
 # ---------------------------------------------------------------------------
 
 def _dummy_inputs(input_specs: list, batch: int, device: str) -> tuple:
     ts = []
     for name, shape in input_specs:
         if name == "rgb":
-            # image-scaled random input: values in [0, 255] like a real frame
+            # 画像の尺度に合わせた乱数入力。実際のフレームと同じ [0, 255]
             ts.append(torch.rand(batch, *shape, device=device) * 255.0)
         else:
             ts.append(torch.randn(batch, *shape, device=device))
@@ -112,8 +112,8 @@ def _dummy_inputs(input_specs: list, batch: int, device: str) -> tuple:
 
 def export_onnx_multi(model: torch.nn.Module, input_specs: list, path: str,
                       device: str = "cpu"):
-    """input_specs: list of (input_name, per-sample shape tuple), e.g.
-    [("flat", (80,)), ("rgb", (84, 84, 3))]."""
+    """input_specs は (入力名, 1標本ぶんの形) のリスト。たとえば
+    [("flat", (80,)), ("rgb", (84, 84, 3))]。"""
     model = model.eval().to(device)
     dummies = _dummy_inputs(input_specs, 1, device)
     names = [n for n, _ in input_specs]
@@ -141,8 +141,8 @@ def validate_onnx_multi(model: torch.nn.Module, input_specs: list, path: str,
 def benchmark_latency_multi(model: torch.nn.Module, input_specs: list,
                             onnx_path: str | None, device: str = "cpu",
                             iters: int = 300):
-    """Single-sample control-loop latency; fewer iters than the state-only
-    benchmark because a ResNet18 forward is ~2 orders slower than an MLP."""
+    """1標本の制御ループ遅延。ResNet18 の順伝播は MLP より2桁ほど遅いので、
+    状態だけの計測より反復回数は少なくしてある。"""
     out = {}
     model = model.eval().to(device)
     xs = _dummy_inputs(input_specs, 1, device)

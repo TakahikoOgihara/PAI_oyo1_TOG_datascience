@@ -1,24 +1,24 @@
 # -*- coding: utf-8 -*-
-"""Scene assembly: N pick-and-place environments inside ONE MuJoCo model.
+"""シーンの組み立て。1つの MuJoCo モデルの中に N 個の環境を作る。
 
-This is the direct equivalent of Isaac Lab's ``InteractiveScene`` cloning that
-ARM_BCRL005 relied on. Each environment is a ``<body>`` placed on a grid at
-``env_origins[i]``, holding its own robot, bench board, block and distractor,
-with every element name-prefixed ``e{i}_``. One ``mj_step`` then advances the
-whole batch, so the vectorised MDP code in ``env.py`` reads exactly like the
-Isaac Lab version did -- observations are computed in the ENV-LOCAL frame as
-``world - env_origin``, which is the same contract the 31-dim observation, the
-ONNX graphs and ``deploy/raspi/`` already assume.
+ARM_BCRL005 が頼っていた Isaac Lab の ``InteractiveScene`` のクローンに
+直接対応するもの。各環境は ``env_origins[i]`` の格子上に置いた
+``<body>`` で、自分のロボット、台の板、ブロック、邪魔物を持ち、要素名は
+すべて ``e{i}_`` を前置する。``mj_step`` 1回でバッチ全体が進むので、
+``env.py`` のベクトル化された MDP のコードは Isaac Lab 版とそのまま同じ
+読み方になる。観測は環境ローカル座標、つまり ``world - env_origin`` で
+計算する。31次元の観測、ONNX グラフ、``deploy/raspi/`` が前提にしている
+契約と同じ。
 
-Why one model instead of N separate ``MjData`` objects: the environments are
-mechanically independent, so MuJoCo's factorisation is block-diagonal and the
-cost is linear either way -- but a single model means a single step call, a
-single set of camera ids, and per-environment domain randomisation is just an
-indexed write into ``model.body_mass`` / ``model.geom_friction`` /
-``model.actuator_gainprm``. That is what keeps ``DomainRandomizer`` readable.
+N個の ``MjData`` ではなく1つのモデルにする理由。環境は力学的に独立
+なので MuJoCo の分解はブロック対角で、コストはどちらでも線形。ただし
+1モデルならステップ呼び出しが1回、カメラIDの集合も1つで済み、環境
+ごとのドメインランダム化は ``model.body_mass`` / ``model.geom_friction``
+/ ``model.actuator_gainprm`` への添字付き書き込みだけになる。それが
+``DomainRandomizer`` を読めるものに保っている。
 
-The robot itself comes from ``assets/build_mycobot_mjcf.py``, which derives it
-from ``deploy/raspi/mycobot_fk.py``. Nothing about the chain is re-typed here.
+ロボット自体は ``assets/build_mycobot_mjcf.py`` が
+``deploy/raspi/mycobot_fk.py`` から導く。連鎖をここで打ち直すことはない。
 """
 
 from __future__ import annotations
@@ -86,24 +86,24 @@ SCENE_TEMPLATE = """<mujoco model="arm_bcrl006_pickplace">
 
 @dataclass
 class SceneIndex:
-    """Every id the env and the randomiser need, resolved once at build time.
+    """環境とランダマイザが必要とするIDを、構築時に一度だけ解決しておく。
 
-    Resolving names to ids EAGERLY (instead of calling ``mj_name2id`` inside
-    the step loop) is what keeps the 20 Hz control loop free of string work,
-    and it means a renamed element fails at construction rather than silently
-    addressing the wrong body 40 minutes into a run.
+    名前からIDを先に引いておく（ステップの中で ``mj_name2id`` を呼ばない）
+    ことが、20Hzの制御ループから文字列処理を追い出している。要素名を
+    変えたときに、40分走ってから静かに別のボディを触るのではなく、
+    構築時に失敗するようにもなる。
     """
 
     num_envs: int
     env_origins: np.ndarray                     # (N, 3)
-    arm_qadr: np.ndarray = field(default=None)  # (N, 6) qpos addresses
+    arm_qadr: np.ndarray = field(default=None)  # (N, 6) の qpos アドレス
     arm_dofadr: np.ndarray = field(default=None)
     finger_qadr: np.ndarray = field(default=None)   # (N, 2)
     finger_dofadr: np.ndarray = field(default=None)
     arm_actid: np.ndarray = field(default=None)     # (N, 6)
     finger_actid: np.ndarray = field(default=None)  # (N, 2)
     obj_bodyid: np.ndarray = field(default=None)    # (N,)
-    obj_qadr: np.ndarray = field(default=None)      # (N,) freejoint qpos adr
+    obj_qadr: np.ndarray = field(default=None)      # (N,) の free joint の qpos アドレス
     obj_dofadr: np.ndarray = field(default=None)
     obj_geomid: np.ndarray = field(default=None)
     dist_bodyid: np.ndarray = field(default=None)
@@ -118,7 +118,7 @@ class SceneIndex:
 
 
 def _env_grid(n: int, spacing: float) -> np.ndarray:
-    """Square-ish grid, same layout rule Isaac Lab uses for ``env_origins``."""
+    """ほぼ正方の格子。Isaac Lab が ``env_origins`` に使う配置規則と同じ。"""
     cols = int(math.ceil(math.sqrt(n)))
     out = np.zeros((n, 3))
     for i in range(n):
@@ -129,15 +129,15 @@ def _env_grid(n: int, spacing: float) -> np.ndarray:
 
 
 def _wristcam_xml(prefix: str, cam_cfg) -> str:
-    """Wrist camera inside the gripper_base body.
+    """gripper_base ボディの中に付ける手首カメラ。
 
-    ``configs/env`` stores the mount rotation in the ROS convention
-    (+Z = optical axis), which is what the real camera's extrinsics are quoted
-    in and what ARM_BCRL005 fed Isaac Lab. MuJoCo cameras look down -Z with +Y
-    up, so the stored quaternion is post-multiplied by a 180 deg rotation about
-    X. Converting HERE, at the single place the camera is created, keeps
-    ``configs/env/mycobot_pickplace.yaml`` describing the physical camera
-    rather than a simulator's internal convention.
+    ``configs/env`` は取り付けの回転を ROS 規約（+Z が光軸）で持っている。
+    実カメラの外部パラメータもその規約で表記され、ARM_BCRL005 が Isaac Lab
+    に渡していたのもそれ。MuJoCo のカメラは -Z 方向を見て +Y が上なので、
+    保存されたクォータニオンに X 軸まわり180度の回転を後ろから掛ける。
+    カメラを作る唯一の場所であるここで変換しておけば、
+    ``configs/env/mycobot_pickplace.yaml`` はシミュレータ内部の規約ではなく
+    物理的なカメラを書いたままでいられる。
     """
     w, x, y, z = (float(v) for v in cam_cfg.rot_wxyz)
     # q * (0, 1, 0, 0)
@@ -145,7 +145,7 @@ def _wristcam_xml(prefix: str, cam_cfg) -> str:
     n = math.sqrt(sum(v * v for v in q))
     q = tuple(v / n for v in q)
     px, py, pz = (float(v) for v in cam_cfg.pos)
-    # square sensor => vertical fov == horizontal fov; MuJoCo takes fovy in deg
+    # 正方センサなので縦画角 == 横画角。MuJoCo は fovy を度で取る
     fovy = float(cam_cfg.hfov_deg) * float(cam_cfg.height) / float(cam_cfg.width)
     return (f'<camera name="{prefix}wristcam" pos="{px!r} {py!r} {pz!r}" '
             f'quat="{q[0]!r} {q[1]!r} {q[2]!r} {q[3]!r}" fovy="{fovy:.6g}"/>')
@@ -153,13 +153,13 @@ def _wristcam_xml(prefix: str, cam_cfg) -> str:
 
 def build_scene_xml(cfg, num_envs: int, with_camera: bool,
                     env_spacing: float = 1.4) -> tuple[str, np.ndarray]:
-    """-> (MJCF string, env_origins (N,3))."""
+    """-> (MJCF の文字列, env_origins (N,3))。"""
     e = cfg.env
     origins = _env_grid(num_envs, env_spacing)
     desk_sx, desk_sy, desk_sz = (float(v) for v in e.desk.size)
-    # ARM_BCRL005's board is 1.2 m square because Isaac Lab spaced envs 2 m
-    # apart. Here the boards must not overlap at the tighter spacing that keeps
-    # the batch compact, so the board is clipped to the spacing.
+    # ARM_BCRL005 の板は 1.2m 四方。Isaac Lab が環境を2m間隔で置いていた
+    # から。ここではバッチを詰めるために間隔を狭めているので、板が重な
+    # らないよう、板は間隔に合わせて切る。
     half_x = min(desk_sx, env_spacing * 0.98) / 2.0
     half_y = min(desk_sy, env_spacing * 0.98) / 2.0
     desk_rgba = " ".join(f"{float(c):.4f}" for c in e.desk.color) + " 1"
@@ -180,7 +180,7 @@ def build_scene_xml(cfg, num_envs: int, with_camera: bool,
         rob = rob.replace("<!--WRISTCAM-->",
                           _wristcam_xml(p, e.camera) if with_camera else "")
         b.append(rob)
-        # the block: a red-painted wooden cylinder (assets/block_reference.jpg)
+        # ブロック。赤く塗った木の円柱（assets/block_reference.jpg）
         spawn_x = (float(e.object.spawn_x[0]) + float(e.object.spawn_x[1])) / 2.0
         b.append(
             f'      <body name="{p}obj" '
@@ -209,10 +209,10 @@ def build_scene_xml(cfg, num_envs: int, with_camera: bool,
                      float(r.finger_damping), float(r.finger_effort_limit))
         for i in range(num_envs))
 
-    # Isaac Lab drove a dome light in lux; MuJoCo's light is a unit-less
-    # diffuse colour. env.lighting.intensity keeps its role as THE exposure
-    # knob the phase-2 image gate reacts to, mapped onto [0,1] around the
-    # 900 lux the ARM_BCRL005 scene was validated at.
+    # Isaac Lab はドーム照明を lux で駆動していたが、MuJoCo の照明は
+    # 無次元の拡散色。env.lighting.intensity は、フェーズ2の画質ゲートが
+    # 反応する露出のつまみという役割を保ったまま、ARM_BCRL005 のシーンを
+    # 検証した900 lux を中心に [0,1] へ写す。
     ldif = min(1.0, max(0.05, float(e.lighting.intensity) / 1400.0))
     xml = SCENE_TEMPLATE.format(
         sim_dt=float(e.sim_dt),

@@ -1,85 +1,85 @@
-# MimicGen (phase 1.5) -- object-centric demonstration augmentation.
+# MimicGen（フェーズ1.5）。物体中心のデモ増補。
 #
-# ARM_BCRL005 ran NVIDIA's `isaaclab_mimic` package verbatim. That package is
-# part of Isaac Lab and cannot run without Isaac Sim, so ARM_BCRL006 carries
-# the algorithm itself (mimicgen/generation.py, ~200 lines) -- which is what
-# ARM_BCRL004 did before it, and which is why the two-step 004 -> 005 learning
-# path was worth taking: the method is understood, not borrowed.
+# ARM_BCRL005 は NVIDIA の `isaaclab_mimic` をそのまま使っていた。あれは
+# Isaac Lab の一部で、Isaac Sim 無しでは動かない。だから ARM_BCRL006 は
+# アルゴリズム自体を持っている（mimicgen/generation.py、約200行）。
+# ARM_BCRL004 でも同じことをしていて、004 -> 005 と二段踏んだ価値はここ。
+# 手法を借りているのではなく、理解している。
 #
-# THE METHOD IS ONE LINE (Mandlekar et al., CoRL 2023, eq. 1):
+# 手法は1行（Mandlekar et al., CoRL 2023, 式1）:
 #
 #     T_eef_new = T_ref_new @ inv(T_ref_src) @ T_eef_src
 #
-# Express a recorded end-effector trajectory in the frame of the object the
-# subtask is ABOUT, then put that frame where the object is in the new scene.
-# Replay the result, keep it only if the environment's own success term fires.
+# 記録した手先の軌跡を、そのサブタスクが対象にしている物体の座標系で
+# 表し直し、その座標系を新しいシーンでの物体位置に置く。結果を再生し、
+# 環境自身の成功判定が出たものだけ残す。
 #
-# WHY IT IS IN THIS PROJECT AT ALL -- two reasons, both about the real robot:
-#   1. It makes the demo SOURCE swappable. Phase 1 is a scripted IK expert,
-#      which assumes the task can be scripted. The moment that assumption
-#      breaks the whole pipeline stops. MimicGen turns ~10 hand-guided real
-#      demonstrations into hundreds (operations guide §7).
-#   2. It is the augmentation axis of the 2x2 study in src/ablation.py: does
-#      generating more data from the same demos actually buy success rate?
-# SHIPS OFF -- and that is a measured decision, not an oversight.
+# なぜこのプロジェクトに入っているのか。理由は2つで、どちらも実機の話:
+#   1. デモの出どころを差し替えられる。フェーズ1はスクリプトIKの
+#      エキスパートで、タスクが書けることを前提にしている。その前提が
+#      崩れた瞬間にパイプライン全体が止まる。MimicGen は手で誘導した
+#      実機デモ10本程度を数百本に変える。
+#   2. src/ablation.py の 2x2 の増補側の軸。同じデモからデータを増やすと、
+#      本当に成功率が買えるのか。
+# 既定はOFF。これは測った上での判断で、見落としではない。
 #
-# The 2x2 study (artifacts/ablation/) trained BC on four datasets of comparable
-# size and evaluated all of them in closed loop:
+# 2x2 の比較実験（artifacts/ablation/）では、同程度の大きさの4つの
+# データセットで BC を学習し、全部を閉ループで評価した:
 #
-#   ~37,000 rows, all collected by the expert        ->  0.885 +- 0.082
-#   ~36,000 rows, expert demos + MimicGen-generated  ->  0.539 +- 0.236
+#   約37,000行、すべてエキスパートが収集       ->  0.885 ± 0.082
+#   約36,000行、エキスパート + MimicGen 生成   ->  0.539 ± 0.236
 #
-# Adding generated rows to collected ones made the policy WORSE and much less
-# reproducible. The reason is not that the generated trajectories are invalid
-# -- every one of them was replayed in the simulator and only kept if the
-# environment's own success term fired. It is that they are executed by the
-# IK replay of a WARPED waypoint sequence, so for the same observation the
-# dataset now contains two different actions. A unimodal regression policy
-# (robomimic BC minimises MSE) answers a multimodal target by averaging it,
-# and the average of two valid ways to reach a block is a way that misses it.
+# 収集した行に生成した行を足すと、方策は悪くなり、再現性も大きく落ちた。
+# 理由は生成した軌跡が不正だからではない。1本ずつシミュレータで再生し、
+# 環境自身の成功判定が出たものだけ残している。原因は、それが転写した
+# 経由点列をIK再生で実行したものだという点。同じ観測に対して、データ
+# セットが2つの異なる行動を持つことになる。単峰の回帰方策（robomimic の
+# BC は MSE を最小化する）は多峰の目標を平均で答えるので、ワークへ届く
+# 2つの正しい道の平均が、届かない道になる。それが成功率にそのまま
+# 出ている。
 #
-# Two consequences, and both are in the defaults:
-#   1. IN SIMULATION, where a demonstration costs seconds, collect more
-#      (configs/config.yaml collect.episodes) instead of generating.
-#   2. MimicGen's value is the regime it was designed for: a REAL robot, where
-#      one demonstration costs a person an afternoon and 0.539 from ten of
-#      them beats 0.000 from ten of them. operations guide ch.7 is that
-#      path, and `mimicgen.enable=true` turns this phase back on for it.
-#      With a multimodal policy class (ACT's CVAE, Diffusion Policy) the mode
-#      averaging above does not apply -- which is the natural next experiment.
+# 結果として2つ、どちらも既定に入れてある:
+#   1. デモが数秒で手に入るシミュレータでは、生成せずに収集を増やす
+#      （configs/config.yaml の collect.episodes）。
+#   2. MimicGen の価値は、設計された状況にある。実機でデモ1本に人の半日が
+#      かかる場面では、10本から 0.539 が出るのは、10本から 0.000 が出る
+#      より良い。その道のためにこのフェーズは残してあり、
+#      `mimicgen.enable=true` で戻る。
+#      多峰を扱える方策クラス（ACT の CVAE、Diffusion Policy）なら上の
+#      平均化は起きない。それが自然な次の実験。
 enable: false
-source_file: bc_demos.pt        # phase 1 output, or a converted real-robot
-                                # recording (mimicgen/import_real_demos.py)
+source_file: bc_demos.pt        # フェーズ1の出力、または変換した実機の記録
+                                # （mimicgen/import_real_demos.py）
 annotated_file: bc_demos_annotated.hdf5
-max_source_demos: 0             # 0 = use all. Set to e.g. 10 to REHEARSE the
-                                # few-real-demos regime BEFORE touching hardware
+max_source_demos: 0             # 0 = 全部使う。実機を触る前に「実機デモが
+                                # 少ない状況」を予習するなら 10 などにする
 num_envs: 32
-episodes: 8                     # per-env batches -> ~256 generation ATTEMPTS
-camera: false                   # record wrist frames for the GENERATED demos?
-                                # No, by default. The generated demos feed the
-                                # state policy (BC -> PPO); the visuomotor stage
-                                # trains on the distillation data from phase 7,
-                                # and the phase-2 image gate reads phase 1's
-                                # frames. Recording them here would add ~3.5 GB
-                                # and ~8 minutes for pixels nothing reads.
-                                # Set true if you want visuomotor.source=expert
-                                # to see the generated demos too.
-workers: 0                      # 0 = auto (camera rendering is the bottleneck)
-keep_source: true               # include the original demos in the output
+episodes: 8                     # 環境ごとのバッチ数 -> 生成の試行が約256回
+camera: false                   # 生成したデモでも手首画像を記録するか。
+                                # 既定はしない。生成デモが養うのは状態方策
+                                # （BC -> PPO）で、視覚運動段はフェーズ7の
+                                # 蒸留データで学習し、フェーズ2の画質ゲートは
+                                # フェーズ1の画像を読む。ここで記録すると、
+                                # 誰も読まない画素のために約3.5GBと約8分を
+                                # 使うことになる。
+                                # visuomotor.source=expert に生成デモも見せたい
+                                # ときだけ true にする。
+workers: 0                      # 0 = 自動（カメラ描画が律速）
+keep_source: true               # 元のデモも出力に含める
 output_file: bc_demos_mimicgen.pt
 generated_file: bc_demos_mimicgen_summary.json
 selection: nearest_neighbor_object   # nearest_neighbor_object | random
-nn_k: 3                         # sample uniformly among the k nearest source
-                                # demos, so the generated set keeps variety
-                                # instead of collapsing onto one trajectory
-interpolation_steps: 12         # steps blended between the current pose and
-                                # the first warped pose of each subtask
+nn_k: 3                         # 近い順にk本の元デモから一様に選ぶので、
+                                # 生成した集合が1本の軌跡に潰れず、
+                                # 多様性を保てる
+interpolation_steps: 12         # 各サブタスクで、現在の姿勢と最初の転写姿勢の
+                                # 間を補間するステップ数
 subtask_term_offset_range: [0, 0]
-action_noise: 0.0               # noise added to the replayed action
-min_yield: 0.30                 # fraction of attempts that must succeed. A low
-                                # yield means the warped trajectories are not
-                                # executable, which is information -- the run
-                                # STOPS instead of training on 30 demos.
-min_source_success: 0.70        # the scripted expert's own success rate is the
-                                # ceiling on data quality; below this, fix the
-                                # expert before generating anything
+action_noise: 0.0               # 再生する行動に加えるノイズ
+min_yield: 0.30                 # 成功しなければならない試行の割合。歩留まりが
+                                # 低いのは、転写した軌跡が実行できないという
+                                # 情報。だから30本で学習するのではなく実行を
+                                # 止める。
+min_source_success: 0.70        # スクリプトエキスパート自身の成功率がデータ
+                                # 品質の上限。これを下回るなら、何かを生成する
+                                # 前にエキスパートを直すこと

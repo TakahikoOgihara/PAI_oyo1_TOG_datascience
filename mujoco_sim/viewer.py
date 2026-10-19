@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
-"""``--mode play``: watch the policy, or record the submission video.
+"""``--mode play``。方策を見る、または提出動画を録る。
 
-Two outputs from one code path, which matters because the video has to show
-the same thing the reviewer can reproduce interactively:
+1つの経路から2つの出力。動画が、査読者が対話的に再現できるものと
+同じものを映す必要があるから。
 
-  * no ``--video``  : ``mujoco.viewer.launch_passive`` -- a real interactive
-    window (orbit, zoom, contact forces, joint frames). Under WSL this works
-    through WSLg with no extra setup.
-  * ``--video out.mp4`` : an offscreen recording with the wrist-camera view
-    inset and a caption strip that names the policy, the episode, the outcome
-    and the running success rate.
+  * ``--video`` 無し  : ``mujoco.viewer.launch_passive``。本物の対話
+    ウィンドウ（旋回、ズーム、接触力、関節フレーム）。WSL では WSLg を
+    通して追加設定なしで動く。
+  * ``--video out.mp4`` : 手首カメラの小窓と、方策名・エピソード・結果・
+    途中までの成功率を書いた字幕帯を重ねたオフスクリーン録画。
 
-The caption strip is not decoration. The assignment is graded partly on
-"表現力: how clearly the video explains what is happening", and a viewer
-watching an arm move has no way to know whether they are looking at a scripted
-expert, a cloned policy or a distilled image policy -- nor whether the episode
-succeeded. Putting the claim and the running score on screen is the difference
-between a demo and evidence.
+字幕帯は飾りではない。課題は「表現力: 何が起きているかをどれだけ
+分かりやすく説明できているか」も採点する。そして、
+アームが動くのを見ているだけの人には、それがスクリプトエキスパート
+なのか、複製した方策なのか、蒸留した画像方策なのかを知る手段が無い。
+エピソードが成功したのかも分からない。主張と途中までの点数を画面に
+出すことが、デモと証拠の違いになる。
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ if REPO_ROOT not in sys.path:
 from mujoco_sim.env import MuJoCoPickPlaceEnv  # noqa: E402
 from mujoco_sim.policies import ExpertController, OnnxPolicy  # noqa: E402
 
-BAR_H = 120        # 3 caption rows, and room for the claim line to wrap to 2
+BAR_H = 120        # 字幕3行と、主張の行が2行に折れる余地
 FG = (236, 240, 244)
 DIM = (150, 160, 172)
 OK = (110, 214, 138)
@@ -44,10 +43,10 @@ BAD = (240, 122, 122)
 
 
 def _pick_policy(env, cfg, onnx_path: str | None):
-    """-> (act_fn, reset_hook, label). Explicit path wins; otherwise prefer the
-    artifact that actually ships (the visuomotor ONNX), then the RL teacher,
-    then the BC policy, and fall back to the scripted expert so ``--mode play``
-    works on a fresh checkout with no trained model at all."""
+    """-> (act_fn, reset_hook, label)。明示したパスが優先。そうでなければ
+    実際に出荷する成果物（視覚運動方策の ONNX）、次に RL の教師、次に
+    BC 方策を選び、最後はスクリプトエキスパートに落ちる。だから学習済み
+    モデルが何も無いクローンでも ``--mode play`` が動く。"""
     deploy = os.path.join(REPO_ROOT, "artifacts", "deploy")
     short = "dp" if str(cfg.visuomotor.type) == "diffusion" else "act"
     candidates = [onnx_path] if onnx_path else [
@@ -66,21 +65,21 @@ def _pick_policy(env, cfg, onnx_path: str | None):
     return (lambda o: expert.act()), expert, "スクリプトIKエキスパート（学習済み方策が無いため）"
 
 
-# A line may break between these pieces, but Japanese typesetting forbids a
-# row that STARTS with closing punctuation or ENDS with an opening bracket.
+# ここの切れ目で行が折れてよいが、日本語の組版では行頭に閉じ括弧や
+# 句読点、行末に開き括弧が来る折り方は禁じられる。
 _NO_ROW_START = "、。，．）〕］｝〉》」』】・…‥ー？！?!,.:;)]}%"
 _NO_ROW_END = "（〔［｛〈《「『【([{"
 _FONT_FILE = None
 
-# Latin, digits, decimal point, the symbols the cards use, kana and kanji. A
-# font has to draw ALL of these: DroidSansFallback, the CJK font most likely
-# to be sitting on a Linux box, is a *fallback* face with no Latin at all, so
-# picking it by existence alone turns every "MimicGen 0.885" into empty boxes.
+# ラテン文字、数字、小数点、カードが使う記号、かなと漢字。フォントは
+# この全部を描けないといけない。Linux 機にいちばん転がっている CJK
+# フォントの DroidSansFallback は補助用の書体でラテン文字を持たないので、
+# 存在だけで選ぶと「MimicGen 0.885」が全部豆腐になる。
 _PROBE = "A0.5×→、あ漢｜"
 
 
 def _covers(path: str) -> bool:
-    """Does the font at ``path`` actually draw every character in ``_PROBE``?"""
+    """``path`` のフォントは ``_PROBE`` の全文字を実際に描けるか。"""
     from PIL import Image, ImageDraw, ImageFont
     try:
         f = ImageFont.truetype(path, 24, index=0)
@@ -92,19 +91,19 @@ def _covers(path: str) -> bool:
         ImageDraw.Draw(img).text((4, 4), ch, fill=255, font=f)
         return img.tobytes()
 
-    notdef = bitmap("\uFFFF")      # the box a font draws for what it lacks
+    notdef = bitmap("\uFFFF")      # 持っていない文字に対してフォントが描く豆腐
     return all(bitmap(c) != notdef for c in _PROBE)
 
 
 def _font_file() -> str:
-    """Path to a font that can draw Japanese, resolved once per process.
+    """日本語を描けるフォントのパス。プロセスにつき1回だけ解決する。
 
-    Pillow's built-in default face is Latin-only, so every kana and kanji in
-    the captions would come out as a blank box. The submission video is in
-    Japanese, which makes a CJK face a hard requirement rather than a nicety.
-    Under WSL the host's Windows fonts are readable through /mnt/c, so this
-    works on the laptop the project is developed on as well as on a Linux box
-    with fonts-noto-cjk installed.
+    Pillow の既定書体はラテン文字しか持たないので、字幕のかなと漢字は
+    全部白い四角になる。提出動画は日本語なので、CJK 書体はあると嬉しい
+    ものではなく必須条件。WSL ではホストの Windows フォントが /mnt/c から
+    読めるので、開発に使っているノートPCでも、fonts-noto-cjk を入れた
+    Linux 機でも同じように動く。探索の順番は下のリストのとおり。
+    見つからなければ例外にする。
     """
     global _FONT_FILE
     if _FONT_FILE is not None:
@@ -115,7 +114,7 @@ def _font_file() -> str:
                 "/usr/share/fonts/**/NotoSansJP*.?t?",
                 "/usr/share/fonts/**/ipag*.?t?",
                 "/usr/share/fonts/**/*japanese-gothic*",
-                "/mnt/c/Windows/Fonts/meiryo.ttc",          # WSL: host fonts
+                "/mnt/c/Windows/Fonts/meiryo.ttc",          # WSL: ホスト側のフォント
                 "/mnt/c/Windows/Fonts/YuGothR.ttc",
                 "/mnt/c/Windows/Fonts/BIZ-UDGothicR.ttc",
                 "/mnt/c/Windows/Fonts/msgothic.ttc",
@@ -136,17 +135,17 @@ def _font_file() -> str:
 
 @functools.lru_cache(maxsize=32)
 def font(size: int):
-    """A scalable Japanese-capable font, cached per size.
+    """日本語が描ける可変サイズのフォント。サイズごとにキャッシュする。
 
-    Cached because it is asked for once per caption row per frame: reopening a
-    ~20 MB .ttc twelve thousand times turns a 2-minute render into a nap.
+    キャッシュするのは、1フレームの字幕1行ごとに要求されるから。
+    約20MBの .ttc を1万2千回開き直すと、2分の描画が仮眠になる。
     """
     from PIL import ImageFont
     path = _font_file()
     if path:
         try:
             return ImageFont.truetype(path, size, index=0)
-        except Exception as exc:                 # unreadable/!TrueType -> fall back
+        except Exception as exc:                 # 読めない、または TrueType でない場合は次へ
             print(f"[viewer] WARNING: cannot load {path}: {exc}")
     try:
         return ImageFont.load_default(size=size)
@@ -155,12 +154,12 @@ def font(size: int):
 
 
 def _pieces(text: str) -> list:
-    """Split ``text`` into the atoms a line break may fall between.
+    """``text`` を、行を折ってよい最小単位に分解する。
 
-    Latin text breaks at spaces; Japanese has no spaces, so every CJK
-    character is its own atom. Splitting only on spaces -- which is what this
-    used to do -- leaves a Japanese caption as one unbreakable 40-character
-    token that runs straight off the right edge of the frame.
+    ラテン文字は空白で折れるが、日本語に空白は無いので、CJK の1文字を
+    それぞれ1単位にする。空白だけで分けると（以前はそうだった）、
+    日本語の字幕は40文字の折れない1トークンになり、フレームの右端から
+    そのまま飛び出していく。
     """
     out, buf = [], ""
     for ch in text:
@@ -179,11 +178,10 @@ def _pieces(text: str) -> list:
 
 
 def wrap(draw, text: str, f, max_w: int) -> list:
-    """Break ``text`` into rows that fit ``max_w`` pixels.
+    """``text`` を ``max_w`` ピクセルに収まる行に折る。
 
-    A caption that runs off the right edge of the frame is not a caption --
-    the viewer of the submitted video silently loses the end of the sentence,
-    which is exactly the half that carries the claim.
+    フレームの右端から出ていく字幕は字幕ではない。提出した動画を見る人は
+    文の終わりを黙って失い、しかもそこが主張を担っている半分。
     """
     rows, cur = [], ""
     for piece in _pieces(text):
@@ -202,7 +200,7 @@ def wrap(draw, text: str, f, max_w: int) -> list:
 
 
 def _caption(width: int, lines: list) -> np.ndarray:
-    """The caption strip under each clip."""
+    """各クリップの下に出す字幕帯。"""
     from PIL import Image, ImageDraw
     img = Image.new("RGB", (width, BAR_H), (18, 20, 24))
     d = ImageDraw.Draw(img)
@@ -216,7 +214,7 @@ def _caption(width: int, lines: list) -> np.ndarray:
 
 
 def _compose(scene: np.ndarray, wrist: np.ndarray, lines: list) -> np.ndarray:
-    """Scene view with the wrist camera inset bottom-right + caption strip."""
+    """シーン視点に、右下へ手首カメラを差し込み、字幕帯を付けたもの。"""
     h, w = scene.shape[:2]
     inset = wrist.shape[0]
     out = scene.copy()
@@ -270,7 +268,7 @@ def play(cfg, args) -> None:
                 ep += 1
                 succ += int(term[0])
                 outcome = "成功" if bool(term[0]) else "失敗（時間切れ）"
-                outcome_age = fps            # hold the verdict on screen for 1 s
+                outcome_age = fps            # 判定を1秒画面に残す
                 reset_hook.reset_idx(torch.tensor([0]))
             if step % fps == 0:
                 print(f"  [play] {step}/{total} frames "
@@ -297,7 +295,7 @@ def _interactive(env, act_fn, reset_hook, mujoco) -> None:
                       f"{'SUCCESS' if bool(term[0]) else 'failure'}")
                 reset_hook.reset_idx(torch.tensor([0]))
             v.sync()
-            # play at wall-clock speed so what is on screen is what the robot
-            # would do at 20 Hz, not a fast-forward
+            # 実時間の速さで再生する。画面に出ているものが、20Hzでロボットが
+            # やることそのものになるようにする。早送りにはしない
             time.sleep(max(0.0, env.control_dt - (time.perf_counter() - t)))
     env.close()

@@ -1,36 +1,36 @@
 # -*- coding: utf-8 -*-
-"""Convert REAL myCobot demonstrations into MimicGen source demos.
+"""実機の myCobot のデモを、MimicGen の元デモに変換する。
 
-This is the file that makes the claim "phase 1 can be replaced by ~10 real
-demonstrations" concrete rather than aspirational.
+「フェーズ1は実機デモ10本程度で置き換えられる」という主張を、願望では
+なく具体的なものにしているファイル。
 
-Input : the JSON episodes written by deploy/raspi/record_demo.py
+入力 : deploy/raspi/record_demo.py が書く JSON のエピソード
         {"control_dt", "object_pos", "place_target_pos",
          "steps": [{"q": [6 rad], "grip": 0|1}, ...]}
-Output: a .pt in EXACTLY the phase-1 format
+出力 : フェーズ1と完全に同じ形式の .pt
         {"obs": [(T,31) float32 ...], "act": [(T,7) float32 ...]}
-        -> point mimicgen.source_file at it and phase 1.5 runs unchanged.
+        -> mimicgen.source_file をこれに向ければ、フェーズ1.5はそのまま動く。
 
-The end-effector poses come from the same forward kinematics the robot's
-floor guard runs on (deploy/raspi/mycobot_fk.py), so the sim and the real
-bench agree on what "where the gripper was" means by construction.
+手先の姿勢は、ロボットの床ガードが走らせるのと同じ順運動学
+（deploy/raspi/mycobot_fk.py）から出す。だからシミュレータと実機は、
+「グリッパがどこにいたか」の意味で、作りの上から一致する。
 
-Of the 31 observation channels, MimicGen reads only eef_pos, eef_quat,
-obj_pos and place_target, plus the gripper channel of the action. The rest
-are filled to keep the format identical to phase 1's; the ones that cannot be
-known from a real recording are documented below rather than faked silently.
+31チャンネルの観測のうち、MimicGen が読むのは eef_pos、eef_quat、
+obj_pos、place_target と、行動のグリッパチャンネルだけ。残りは
+フェーズ1と同じ形式を保つために埋める。実機の記録からは分からない
+ものは、黙って捏造せず下に明記する。
 
-TWO THINGS A REAL RECORDING CANNOT GIVE YOU, and how they are handled:
-  * camera frames -- real demos carry no simulator RGB, so they cannot be
-    merged into the generated dataset. Use mimicgen.keep_source=false. The
-    GENERATED demos are replayed in simulation, so they CAN carry frames --
-    set mimicgen.camera=true if the visuomotor stage should see them (it
-    ships false because the deployed image policy trains on phase 7's
-    distillation data instead).
-  * object pose -- supplied by the touch-off procedure in record_demo.py
-    (guide the TCP onto the block, press 'o'). This is the one piece of
-    annotation a real MimicGen deployment always has to source somehow;
-    touch-off, an AprilTag or a pose estimator are the usual three options.
+実機の記録から得られないものが2つ。その扱い:
+  * カメラ画像。実機デモにシミュレータのRGBは無いので、生成した
+    データセットに混ぜられない。mimicgen.keep_source=false を使う。
+    生成したデモはシミュレータで再生するので、そちらは画像を持てる。
+    視覚運動段に見せたいなら mimicgen.camera=true にする（既定は
+    false。配備する画像方策は、代わりにフェーズ7の蒸留データで
+    学習するから）。
+  * 物体の姿勢。record_demo.py のタッチオフ手順で与える（TCP を
+    ブロックに当てて 'o' を押す）。実機で MimicGen を回すときに必ず
+    どこかから用意しないといけない注釈がこれで、タッチオフ、
+    AprilTag、姿勢推定器が普通の3択。
 
 Usage:
     python3 mimicgen/import_real_demos.py ~/real_demos artifacts/data/real_demos.pt
@@ -59,7 +59,7 @@ NUM_ARM_JOINTS = 6
 
 
 def _tcp_pose(q) -> tuple:
-    """-> (position (3,), quaternion wxyz (4,)) of the TCP in the base frame."""
+    """-> 基準座標での TCP の (位置 (3,), クォータニオン wxyz (4,))。"""
     R, p = flange_pose(q)
     R = np.asarray(R, dtype=np.float64).reshape(3, 3)
     pos = np.asarray(p, dtype=np.float64) + R[:, 2] * TCP_Z
@@ -69,7 +69,7 @@ def _tcp_pose(q) -> tuple:
 def convert_episode(ep: dict, action_scale: float = 0.05,
                     gripper_open: float = 0.028,
                     finger_closed: float = 0.0126) -> tuple:
-    """One recorded episode -> (obs (T,31), act (T,7)) in the phase-1 layout."""
+    """記録したエピソード1件 -> フェーズ1の並びでの (obs (T,31), act (T,7))。"""
     steps = ep["steps"]
     T = len(steps)
     q = np.array([s["q"] for s in steps], dtype=np.float64)          # (T, 6)
@@ -82,24 +82,24 @@ def convert_episode(ep: dict, action_scale: float = 0.05,
     for t in range(T):
         eef_pos[t], eef_quat[t] = _tcp_pose(q[t])
 
-    # action: joint deltas that would take q[t] to q[t+1], in the env's units,
-    # plus the binary gripper channel (+1 open / -1 closed) -- the same
-    # contract deploy/raspi/mycobot_bridge_server.py integrates on the robot.
+    # 行動。q[t] を q[t+1] へ動かす関節差分を、環境の単位で表したもの。
+    # それに2値のグリッパチャンネル（+1 開 / -1 閉）を足す。
+    # deploy/raspi/mycobot_bridge_server.py が実機で積分するのと同じ契約。
     act = np.zeros((T, ACT_DIM))
-    dq = np.diff(q, axis=0, append=q[-1:])   # last step repeats: no motion after it
+    dq = np.diff(q, axis=0, append=q[-1:])   # 最後のステップは繰り返し。その後に動きは無い
     act[:, :NUM_ARM_JOINTS] = np.clip(dq / action_scale, -1.0, 1.0)
     act[:, 6] = np.where(grip_open > 0, 1.0, -1.0)
 
     fingers = np.where(grip_open > 0, gripper_open, finger_closed)
     obs = np.zeros((T, OBS_DIM))
-    obs[:, 0:NUM_ARM_JOINTS] = q                     # arm joints  (measured)
-    obs[:, 6] = fingers                              # finger joints (inferred
-    obs[:, 7] = fingers                              #   from the binary grip)
-    obs[:, 8:11] = eef_pos                           # <- used by MimicGen
-    obs[:, 11:15] = eef_quat                         # <- used by MimicGen
-    obs[:, 15:18] = obj                              # <- used by MimicGen
+    obs[:, 0:NUM_ARM_JOINTS] = q                     # アームの関節（実測）
+    obs[:, 6] = fingers                              # 指の関節（2値の grip から
+    obs[:, 7] = fingers                              #   推定）
+    obs[:, 8:11] = eef_pos                           # <- MimicGen が使う
+    obs[:, 11:15] = eef_quat                         # <- MimicGen が使う
+    obs[:, 15:18] = obj                              # <- MimicGen が使う
     obs[:, 18:21] = obj[None] - eef_pos
-    obs[:, 21:24] = tgt                              # <- used by MimicGen
+    obs[:, 21:24] = tgt                              # <- MimicGen が使う
     obs[1:, 24:31] = act[:-1]                        # prev_action
     return obs.astype(np.float32), act.astype(np.float32)
 
@@ -154,7 +154,7 @@ def convert_directory(in_dir: str, out_path: str, action_scale: float = 0.05) ->
 
 
 def _self_test() -> None:
-    """No torch and no robot needed: verify the geometry round-trip."""
+    """torch も実機も要らない。幾何の往復を検証する。"""
     q = [0.25, -1.0, -0.1, -0.5, 0.0, 0.0]
     T = 60
     ep = {"control_dt": 0.05,
@@ -165,21 +165,21 @@ def _self_test() -> None:
     obs, act = convert_episode(ep)
     assert obs.shape == (T, OBS_DIM) and act.shape == (T, ACT_DIM)
 
-    # the eef pose written into obs must match the robot's own FK
+    # obs に書く手先の姿勢は、実機自身のFKと一致しないといけない
     pos, quat = _tcp_pose(q)
     print(f"TCP from FK                   : {np.round(pos, 4)}  "
           f"(home reference [0.2556, -0.0004, 0.1001])")
     assert np.abs(pos - np.array([0.2556, -0.0004, 0.1001])).max() < 1e-3
     assert np.allclose(obs[0, 8:11], pos, atol=1e-6)
     assert np.allclose(obs[0, 11:15], quat, atol=1e-6)
-    # the tool must point down: rotating +Z by the recorded quat gives -Z
+    # ツールは下を向くこと。記録したクォータニオンで +Z を回すと -Z になる
     from mimicgen.pose_np import quat_to_mat
     axis = quat_to_mat(quat) @ np.array([0.0, 0.0, 1.0])
     print(f"tool axis from quaternion     : {np.round(axis, 3)}")
     assert axis[2] < -0.99
 
-    # the annotator must be able to turn what we produced into the
-    # datagen_info MimicGen reads
+    # 作ったものを、注釈器が MimicGen の読む datagen_info に
+    # できないといけない
     from mimicgen.annotate import build_episode_arrays, grasp_signal
     sig = grasp_signal(act[:, 6])
     assert sig is not None, "converted real demo must be annotatable"

@@ -1,28 +1,28 @@
 # -*- coding: utf-8 -*-
-"""Record REAL myCobot demonstrations by hand-guiding the arm.
+"""実機の myCobot のデモを、手で誘導して記録する。
 
-This is the other half of the MimicGen story: phase 1's scripted expert is a
-convenience, not a requirement. Ten demonstrations recorded here, converted by
-mimicgen/import_real_demos.py, can replace it entirely -- and everything
-downstream (phase 1.5 warping, phases 2-10) runs unchanged.
+MimicGen の話のもう半分。フェーズ1のスクリプトエキスパートは便利な
+手段であって、必須条件ではない。ここで録った10本を
+mimicgen/import_real_demos.py で変換すれば、完全に置き換えられる。
+下流（フェーズ1.5の転写、フェーズ2〜10）は何も変えずに動く。
 
-Kinesthetic teaching, using only the bridge protocol that already exists:
+やり方は直接教示。すでにあるブリッジのプロトコルだけを使う:
 
-  1. ``release``  -> arm servos go limp, you move the arm by hand
-  2. you guide the TCP onto the block and press ``o`` -- the object pose is
-     captured by FORWARD KINEMATICS of the measured joints
-     (mycobot_fk.tcp_pos). No camera, no marker, no calibration rig. This
-     "touch-off" is the standard way to teach a point on a real cell.
-  3. same for the place target with ``p``
-  4. ``r`` starts recording joint angles at 20 Hz while you perform the task,
-     toggling the gripper with ``g`` at the moment you would grasp / release
-  5. ``d`` ends the episode and writes the JSON
+  1. ``release`` -> サーボのトルクが抜け、手でアームを動かせる
+  2. TCP をブロックに当てて ``o`` を押す。物体の姿勢は、実測した関節の
+     順運動学（mycobot_fk.tcp_pos）で取る。カメラもマーカーも校正治具も
+     要らない。この「タッチオフ」は、実機のセルで点を教える標準的な
+     やり方。
+  3. 設置目標も ``p`` で同じように取る
+  4. ``r`` で 20Hz の関節角の記録を始め、作業しながら、掴む／放す
+     瞬間に ``g`` でグリッパを切り替える
+  5. ``d`` でエピソードを終え、JSON を書く
 
-The gripper edges are what MimicGen segments on (mimicgen/annotate.py), which
-is exactly why they are recorded as an explicit operator action rather than
+MimicGen が区切りに使うのはグリッパの切り替わり（mimicgen/annotate.py）。
+だからそれを、操作者の明示的な動作として記録している。
 inferred.
 
-Run (operator PC or the Pi itself; the bridge must be running):
+実行（操作用PC か Pi 自身。ブリッジが動いていること）:
     python3 record_demo.py --pi 192.168.10.10:9000 --out ~/real_demos
 """
 
@@ -85,7 +85,7 @@ class Recorder:
         self.object_pos = None
         self.place_pos = None
 
-    # ---- operator commands -------------------------------------------
+    # ---- 操作者からの指令 ---------------------------------------------
     def handle(self, key: str) -> None:
         st = self.b.call({"cmd": "state"})
         q = st["q"]

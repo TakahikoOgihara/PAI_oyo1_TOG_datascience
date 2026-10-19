@@ -1,29 +1,29 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 1.5 -- MimicGen demonstration generation.
+"""ARM_BCRL006 フェーズ1.5。MimicGen によるデモ生成。
 
-Three steps, one command:
+3段階を1コマンドで:
 
-  1. ANNOTATE  mimicgen/annotate.py   phase-1 .pt -> object-centric HDF5
-                                      (subtasks segmented on the gripper signal)
-  2. GENERATE  --mode mimicgen        warp each subtask onto a freshly
-                                      randomised scene, replay it, keep the
-                                      episodes the env's own success term
-                                      accepts  (sharded across processes)
-  3. MERGE     source demos + generated demos -> the dataset phase 2 reads
+  1. 注釈    mimicgen/annotate.py   フェーズ1の .pt -> 物体中心の HDF5
+                                      （サブタスクはグリッパ信号で分割）
+  2. 生成    --mode mimicgen        各サブタスクを新しくランダム化した
+                                      シーンへ転写して再生し、環境自身の
+                                      成功判定が通ったエピソードだけ残す
+                                      （プロセス分割で並列）
+  3. 結合    元のデモ + 生成したデモ -> フェーズ2が読むデータセット
 
-WHAT THIS BUYS, concretely:
-  * the demo SOURCE becomes swappable. ``mimicgen.source_file=real_demos.pt``
-    points step 1 at a converted hand-guided recording of the REAL arm
-    (mimicgen/import_real_demos.py) and the rest of the pipeline does not
-    change. ``mimicgen.max_source_demos=10`` rehearses that regime in
-    simulation BEFORE anyone touches hardware.
-  * it is one arm of the 2x2 study (src/ablation.py): does generating more
-    data from the same demonstrations actually raise closed-loop success?
+具体的に何が買えるか:
+  * デモの出どころを差し替えられる。``mimicgen.source_file=real_demos.pt``
+    で、実機を手で誘導して録った記録を変換したもの
+    （mimicgen/import_real_demos.py）を1段目に向けられる。残りの
+    パイプラインは変えない。``mimicgen.max_source_demos=10`` は、実機を
+    触る前にその「実機デモが少ない状況」をシミュレータで予習する。
+  * 2x2 の比較実験（src/ablation.py）の片方の軸。同じデモからデータを
+    増やすと、閉ループの成功率は本当に上がるのか。
 
-The run STOPS if the yield is below ``mimicgen.min_yield``. A low yield is not
-a nuisance, it is the measurement: it says the warped trajectories are not
-executable from the new object poses, and training on the handful that survived
-would hide that behind a slightly worse final number.
+歩留まりが ``mimicgen.min_yield`` を下回ると実行を止める。低い歩留まりは
+面倒事ではなく測定結果で、転写した軌跡が新しい物体姿勢からは実行でき
+ないという意味。生き残った数本で学習すると、その事実が少し悪いだけの
+最終スコアの裏に隠れてしまう。
 """
 
 from __future__ import annotations
@@ -49,9 +49,9 @@ def main(cfg: DictConfig) -> None:
     mg = cfg.mimicgen
     out_path = os.path.join(DATA_DIR, str(mg.output_file))
     if not bool(mg.enable):
-        # Leave no stale augmented dataset behind: phase 2 prefers it when it
-        # exists, so a disabled phase 1.5 that left one lying around would
-        # silently keep training on last run's augmentation.
+        # 古い増補データセットを残さない。フェーズ2は増補版があればそちらを
+        # 優先するので、無効にしたフェーズ1.5が前回の増補を置き去りにすると、
+        # 黙って前回のデータで学習し続けることになる。
         if os.path.exists(out_path):
             os.remove(out_path)
         print("[mimicgen] mimicgen.enable=false -- skipping (phase 2 will use "

@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Inference backend for the Jetson Orin Nano: TensorRT engine first,
-onnxruntime as the universal fallback.
+"""Jetson Orin Nano 用の推論バックエンド。まず TensorRT のエンジンを使い、
+駄目なら onnxruntime に落ちる（どこでも動く退避路）。
 
 Usage:
     backend = InferenceBackend("act_policy_fp16.engine")   # TensorRT
-    backend = InferenceBackend("arm_bcrl006_act_policy.onnx")  # ORT fallback
+    backend = InferenceBackend("arm_bcrl006_act_policy.onnx")  # ORT の退避路
     out = backend.run({"rgb": rgb_f32, "qpos": qpos_f32})[0]
 
-The TensorRT path targets the TensorRT 10.x python API that ships with
-JetPack 6 (named tensors + execute_async_v3, buffers via cuda-python), with a
-fallback to the 8.x binding-index API. Engines are built from the ONNX with
-deploy/jetson/build_trt_engine.sh (trtexec --fp16).
+TensorRT 側は JetPack 6 付属の TensorRT 10.x の python API（名前付き
+テンソル + execute_async_v3、バッファは cuda-python）を狙い、8.x の
+バインディング添字のAPIにも落ちられる。エンジンは ONNX から
+deploy/jetson/build_trt_engine.sh（trtexec --fp16）で作る。
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ class _OrtBackend:
 
 
 def InferenceBackend(path: str):
-    """Factory: .engine/.plan -> TensorRT, .onnx -> onnxruntime."""
+    """工場関数。.engine/.plan なら TensorRT、.onnx なら onnxruntime。"""
     if path.endswith((".engine", ".plan")):
         return _TrtBackend(path)
     return _OrtBackend(path)

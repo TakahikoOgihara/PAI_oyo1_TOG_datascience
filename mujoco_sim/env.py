@@ -1,35 +1,35 @@
 # -*- coding: utf-8 -*-
-"""myCobot 280 Pi pick&place in MuJoCo -- the single source of truth for
-physics, observation, reward, success judgment and the safety envelope.
+"""MuJoCo 上の myCobot 280 Pi の pick&place。物理、観測、報酬、成功判定、
+安全包絡の単一の正本。
 
-Used identically by demo collection, MimicGen generation, BC/visuomotor
-evaluation, PPO fine-tuning, teacher-student distillation and the viewer, just
-as ``mujoco_sim/train_arm_mujoco.py`` was in ARM_BCRL005.
+デモ収集、MimicGen 生成、BC と視覚運動方策の評価、PPO 微調整、教師生徒
+の蒸留、ビューアが、すべて同じものを使う。ARM_BCRL005 の
+``mujoco_sim/train_arm_mujoco.py`` と同じ扱い。
 
-WHAT IS UNCHANGED FROM ARM_BCRL005 (deliberately -- these are the contracts
-every downstream artifact is defined on, and a port that quietly moved them
-would invalidate the comparison this project exists to make):
+ARM_BCRL005 から変えていないもの（意図的。これは下流の成果物すべてが
+定義の土台にしている契約で、移植のついでに黙って動かしたら、この
+プロジェクトの比較そのものが無効になる）:
 
-  * the 31-dim observation and its ORDER
+  * 31次元の観測と、その順番
         q(8) | eef_pos(3) | eef_quat(4, wxyz) | obj(3) | obj-eef(3) |
         place_target(3) | prev_action(7)
-  * the 7-dim action: 6 joint-position deltas + 1 binary gripper channel,
-    with bounded-lead target integration, the virtual-floor bisection, the
-    under-closed gripper target and the 2 mm/step rate-limited close
-  * every reward term and weight, the success test, the termination set
-  * the virtual floor: same plane, same clearance, same forward kinematics
-    (``deploy/raspi/mycobot_fk.py``), same bisection as the Raspberry Pi guard
+  * 7次元の行動。関節位置の差分6 + グリッパの2値1チャンネル。有界な
+    リード付きの目標積分、仮想床の二分探索、閉じ気味のグリッパ目標、
+    2mm/ステップのレート制限付きの閉じ動作も含めて同じ
+  * 報酬の全項と重み、成功判定、終了条件の集合
+  * 仮想床。同じ平面、同じクリアランス、同じ順運動学
+    （``deploy/raspi/mycobot_fk.py``）、Pi 側のガードと同じ二分探索
   * 20 Hz control
 
-WHAT NECESSARILY CHANGED: the simulator. Isaac Lab's manager classes
-(ObservationManager / RewardManager / EventManager / ActionTerm) are Isaac Lab
-API, not a portable design, so the same MDP is expressed as plain methods here
-and the EventManager becomes ``DomainRandomizer``. The mapping is one-to-one
-and is tabulated in change log §3.
+必然的に変わったもの。シミュレータ。Isaac Lab の管理クラス
+（ObservationManager / RewardManager / EventManager / ActionTerm）は
+Isaac Lab のAPIで、移植できる設計ではない。だから同じMDPをここでは
+素のメソッドとして書き、EventManager は ``DomainRandomizer`` になった。
+対応は1対1。
 
-Everything runs on CPU (MuJoCo is a CPU simulator); policies may live on the
-GPU and the tensors cross that boundary once per control step, which for a
-(N, 31) observation is free.
+全部CPUで動く（MuJoCo はCPUのシミュレータ）。方策はGPUにいてよく、
+テンソルは制御1ステップにつき1回だけその境界を渡る。(N, 31) の観測なら
+その費用は無視できる。
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ NUM_JOINTS = 8
 ACT_DIM = 7
 OBS_DIM = NUM_JOINTS + 3 + 4 + 3 + 3 + 3 + ACT_DIM      # 31
 
-# observation slices, frozen (mimicgen/annotate.py and arm_policy/dataset.py
-# index into exactly these)
+# 観測のスライス。凍結してある（mimicgen/annotate.py と
+# arm_policy/dataset.py がまさにこの位置を参照する）
 OBS_ARM_Q = slice(0, 6)
 OBS_EEF_POS = slice(8, 11)
 OBS_EEF_QUAT = slice(11, 15)
@@ -62,15 +62,15 @@ OBS_PLACE_TARGET = slice(21, 24)
 
 
 def _select_gl_backend() -> str:
-    """Pick an offscreen GL backend that actually works on this machine.
+    """この機械で実際に動くオフスクリーンGLバックエンドを選ぶ。
 
-    Order is deliberate. ``osmesa`` is pure software: slowest in principle but
-    the only one with no dependency on a display server or a driver's EGL
-    stack, which under WSL2 is where offscreen rendering usually breaks. On
-    this project's reference machine all three measure within 20 % of each
-    other anyway (operations guide §5), because the bottleneck is the
-    per-frame pixel read-back, not rasterisation -- so correctness wins.
-    Override with MUJOCO_GL=egl|glfw|osmesa.
+    順番は意図的。``osmesa`` は純粋なソフトウェアで、原理的にはいちばん
+    遅い。しかしディスプレイサーバもドライバのEGLスタックにも依存しない
+    唯一の選択肢で、WSL2 ではそこがオフスクリーン描画の壊れどころ。
+    このプロジェクトの基準機では結局3つとも差は20%以内だった。律速が
+    ラスタライズではなくフレームごとの画素の読み戻しだからで、だから
+    ここでは正しさを優先する。
+    MUJOCO_GL=egl|glfw|osmesa で上書きできる。
     """
     if os.environ.get("MUJOCO_GL"):
         return os.environ["MUJOCO_GL"]
@@ -79,7 +79,7 @@ def _select_gl_backend() -> str:
 
 
 class MuJoCoPickPlaceEnv:
-    """Vectorised over ``num_envs`` environments living in one MuJoCo model."""
+    """1つの MuJoCo モデルの中に住む ``num_envs`` 個の環境をまとめて扱う。"""
 
     def __init__(self, cfg, num_envs: int, with_camera: bool = False,
                  seed: int = 42, device: str = "cpu"):
@@ -92,12 +92,12 @@ class MuJoCoPickPlaceEnv:
         self.device = device
         self.with_camera = bool(with_camera)
         self.rng = np.random.RandomState(int(seed))
-        # A SECOND stream, for the randomness that is the TASK rather than a
-        # perturbation: where the block spawns and where it has to go.
-        # Keeping it separate means a DR-on and a DR-off run with the same seed
-        # see the SAME sequence of object poses -- otherwise the DR draws shift
-        # the shared stream and the two conditions are evaluated on different
-        # scenes, which is exactly the confound src/ablation.py exists to avoid.
+        # 2つ目の乱数系列。摂動ではなくタスクそのものの乱数、つまり
+        # ブロックがどこに出てどこへ運ぶかに使う。分けておけば、DR あり/なしの
+        # 実行で同じシードなら同じ物体姿勢の列を見る。分けないと DR の抽選が
+        # 共有系列をずらし、2つの条件が違うシーンで評価されることになる。
+        # それはまさに src/ablation.py が避けるために存在する交絡。
+        # だからここは系列を2本持つ。
         self.task_rng = np.random.RandomState(int(seed) + 991)
 
         e = cfg.env
@@ -118,9 +118,9 @@ class MuJoCoPickPlaceEnv:
         self.idx = index_scene(self.model, self.num_envs, origins, self.with_camera)
         self.env_origins = torch.as_tensor(origins, dtype=torch.float32)
 
-        # SAFETY PLANE -- identical to the one the Raspberry Pi enforces: same
-        # forward kinematics, same clearance, same bisection
-        # (field-failure notes §4 of ARM_BCRL005, carried over).
+        # 安全面。Raspberry Pi 側が強制するものと同一。同じ順運動学、
+        # 同じクリアランス、同じ二分探索（ARM_BCRL005 の実機での
+        # 失敗記録の分類から引き継いだ）。
         self.tool_kin = ToolKinematics(device)
         self.tool_kin.assert_matches_reference()
         f = e.floor
@@ -177,7 +177,7 @@ class MuJoCoPickPlaceEnv:
         self.push_timer = z(n)
         self.n_diverged = 0
 
-    # -- raw state -----------------------------------------------------
+    # -- 生の状態 -------------------------------------------------------
     def _qpos(self, adr: np.ndarray) -> torch.Tensor:
         return torch.as_tensor(self.data.qpos[adr], dtype=torch.float32)
 
@@ -192,10 +192,10 @@ class MuJoCoPickPlaceEnv:
         return p - self.env_origins
 
     def eef_quat_env(self) -> torch.Tensor:
-        """TCP orientation, wxyz. MuJoCo's ``xquat`` is already wxyz, which is
-        the convention the frozen 31-dim layout, ``mimicgen/pose_np.py`` and
-        ``mimicgen/import_real_demos.py`` (real robot, no simulator) all use --
-        so unlike Isaac Lab 3.0 there is no conversion at this boundary."""
+        """TCP の姿勢、wxyz。MuJoCo の ``xquat`` は既に wxyz で、凍結した
+        31次元の並び、``mimicgen/pose_np.py``、``mimicgen/import_real_demos.py``
+        （実機。シミュレータ無し）がどれも使う規約と同じ。だから Isaac Lab 3.0
+        と違って、この境界に変換は要らない。"""
         return torch.as_tensor(self.data.xquat[self.idx.flange_bodyid], dtype=torch.float32)
 
     def obj_pos_env(self) -> torch.Tensor:
@@ -207,9 +207,9 @@ class MuJoCoPickPlaceEnv:
         return torch.as_tensor(v, dtype=torch.float32)
 
     def qpos_policy(self) -> torch.Tensor:
-        """The DEPLOYABLE proprioception: 6 arm joints + the previous gripper
-        command -- exactly what the real robot can report (pymycobot
-        ``get_radians`` plus the runtime's own last gripper command)."""
+        """配備できる自己受容感覚。アーム6関節 + 直前のグリッパ指令。
+        実機が報告できるものと正確に同じ（pymycobot の ``get_radians`` と、
+        ランタイム自身が最後に出したグリッパ指令）。"""
         return torch.cat([self.arm_q(), self.actions[:, 6:7]], dim=-1)
 
     # -- observation ---------------------------------------------------
@@ -227,7 +227,7 @@ class MuJoCoPickPlaceEnv:
         ], dim=-1)
         return {"policy": obs.to(self.device)}
 
-    # -- rewards (per step; weights are configs/env/...yaml verbatim) ---
+    # -- 報酬（ステップごと。重みは configs/env/...yaml のまま） --------
     def _rewards(self) -> torch.Tensor:
         e = self.cfg.env
         w = e.reward
@@ -267,11 +267,11 @@ class MuJoCoPickPlaceEnv:
         released = self.actions[:, 6] > 0
         return self.was_lifted & near & down & slow & released
 
-    # -- action term ----------------------------------------------------
+    # -- 行動項 ----------------------------------------------------------
     def _process_actions(self, action: torch.Tensor) -> None:
-        """Byte-for-byte ARM_BCRL005's ``MyCobotJointDeltaAction`` contract:
-        bounded-lead target integration (anti-windup), the virtual-floor
-        bisection, an under-closed gripper target and a rate-limited close."""
+        """ARM_BCRL005 の ``MyCobotJointDeltaAction`` の契約をそのまま。
+        有界なリード付きの目標積分（アンチワインドアップ）、仮想床の
+        二分探索、閉じ気味のグリッパ目標、レート制限付きの閉じ動作。"""
         a = action.detach().to("cpu", torch.float32).clamp(-1.0, 1.0)
         self.actions = a
         q_now = self.arm_q()
@@ -294,10 +294,10 @@ class MuJoCoPickPlaceEnv:
         self.data.ctrl[self.idx.finger_actid] = self.grip_target.numpy()
 
     def _cross_check_tool_fk(self) -> None:
-        """Once per process, assert the analytic tool FK agrees with MuJoCo's
-        own TCP site. This is what makes the shared safety envelope
-        trustworthy: if the MJCF ever stops matching the constants the guard is
-        computed from, we find out here and not on the robot."""
+        """プロセスにつき1回、解析的なツールFKが MuJoCo 自身の TCP サイトと
+        一致することを確認する。共有している安全包絡を信用できるのはこれが
+        あるから。MJCF がガードの計算に使う定数と合わなくなったら、ロボットの
+        上ではなくここで分かる。"""
         if self._verified_fk:
             return
         self._verified_fk = True
@@ -317,12 +317,12 @@ class MuJoCoPickPlaceEnv:
         self._write_ctrl()
         for _ in range(self.decimation):
             self.mujoco.mj_step(self.model, self.data)
-        # mj_step integrates qpos LAST and does not re-run kinematics, so
-        # data.site_xpos / data.xpos still describe the state one substep ago.
-        # Reading the observation without this leaves eef_pos and obj_pos 4 ms
-        # stale relative to the joint angles in the SAME vector -- measured at
-        # ~0.5 mm of TCP disagreement, which is a quarter of the placement
-        # tolerance and would be baked into every recorded demonstration.
+        # mj_step は qpos を最後に積分し、運動学を再計算しない。だから
+        # data.site_xpos / data.xpos はまだ1サブステップ前の状態を表している。
+        # これを入れずに観測を読むと、同じベクトルの中で eef_pos と obj_pos が
+        # 関節角に対して4ms古くなる。実測で TCP 約0.5mmのずれ。設置許容の
+        # 4分の1に当たり、記録する全デモにそれが焼き付く。
+        # だからここで前方運動学を回し直す。
         self.mujoco.mj_forward(self.model, self.data)
         self.episode_length_buf += 1
         self._update_episode_stats()
@@ -331,20 +331,20 @@ class MuJoCoPickPlaceEnv:
         rew = self._rewards()
         success = self.is_success()
         timeout = self.episode_length_buf >= self.max_episode_length
-        # tool pushed BELOW the plane despite the guard => contact, or a start
-        # pose already under it. Ends the episode as a NON-success, so such
-        # trajectories stay out of the dataset and show up in the metrics
-        # instead of hiding in the physics.
+        # ガードがあるのにツールが面より下に押し込まれた場合は接触か、
+        # そもそも面の下から始まった姿勢。非成功としてエピソードを終える。
+        # そうすればその軌跡はデータセットに入らず、物理の中に隠れずに
+        # 指標として出てくる。
         breach = self.tool_z < self.floor_terminate_z
         term = success
         trunc = (timeout | breach) & ~success
 
-        # DIVERGENCE GUARD. MuJoCo can, rarely, blow a contact up into NaN/Inf.
-        # Unattended, a single diverged environment writes NaNs into the
-        # recorded demonstrations, and the damage surfaces hours later as a
-        # trainer that produces a NaN loss with no indication of where it came
-        # from. Catch it at the boundary: reset the environment, count it, and
-        # let the episode be discarded as a non-success.
+        # 発散ガード。MuJoCo はまれに接触を NaN/Inf まで吹き飛ばす。放って
+        # おくと、発散した環境1つが記録デモに NaN を書き込み、被害は数時間後に
+        # 「NaN の損失を出すが出どころが分からない学習器」として現れる。
+        # 境界で捕まえる。その環境をリセットして数え、エピソードは非成功
+        # として捨てる。
+        # ここで止めれば、汚染はデータセットに届かない。
         diverged = ~torch.isfinite(
             torch.cat([self.arm_q(), self.obj_pos_env(), rew.unsqueeze(-1)], dim=-1)
         ).all(dim=-1)
@@ -381,10 +381,10 @@ class MuJoCoPickPlaceEnv:
         return self.get_observations(), {}
 
     def _reset_idx(self, env_ids: np.ndarray) -> None:
-        """Order matters and mirrors ARM_BCRL005 exactly: stash the terminal
-        metrics BEFORE the reset moves the object (the env auto-resets inside
-        ``step``, and callers read the stashed values), then randomise, then
-        restart the action integrator from where the arm actually is."""
+        """順番に意味があり、ARM_BCRL005 と完全に同じ。リセットが物体を
+        動かす前に終端時の指標を退避し（環境は ``step`` の中で自動リセット
+        し、呼び出し側は退避した値を読む）、次にランダム化し、最後に行動の
+        積分器をアームの実際の位置から再開する。"""
         if len(env_ids) == 0:
             return
         t = torch.as_tensor(env_ids, dtype=torch.long)
@@ -393,9 +393,9 @@ class MuJoCoPickPlaceEnv:
         self.final_place_err[t] = torch.norm(
             self.obj_pos_env()[t, :2] - self.place_target[t, :2], dim=-1)
 
-        # A diverged environment can carry NaN in dofs the reset does not write
-        # (a flung distractor, a contact velocity). Zero this env's whole
-        # velocity state first so the reset cannot inherit the divergence.
+        # 発散した環境は、リセットが書かない自由度（飛んでいった邪魔物、
+        # 接触速度）に NaN を抱えていることがある。先にこの環境の速度状態を
+        # 全部ゼロにして、リセットが発散を引き継がないようにする。
         bad = ~np.isfinite(self.data.qvel)
         if bad.any():
             self.data.qvel[bad] = 0.0
@@ -403,10 +403,10 @@ class MuJoCoPickPlaceEnv:
             self.data.qpos[~np.isfinite(self.data.qpos)] = 0.0
         self.dr.reset_envs(env_ids)
         if self.dr.needs_setconst:
-            # Recompute the mass-derived solver constants (see
-            # DomainRandomizer.needs_setconst). mj_setConst uses its MjData
-            # argument as SCRATCH and leaves it at qpos0, so it must never be
-            # handed the live state -- hence the dedicated buffer.
+            # 質量由来のソルバ定数を再計算する
+            # （DomainRandomizer.needs_setconst 参照）。mj_setConst は渡した
+            # MjData を作業領域として使い、qpos0 の状態で置き去りにするので、
+            # 生きている状態を渡してはいけない。だから専用のバッファを使う。
             if self._setconst_scratch is None:
                 self._setconst_scratch = self.mujoco.MjData(self.model)
             self.mujoco.mj_setConst(self.model, self._setconst_scratch)
@@ -426,30 +426,30 @@ class MuJoCoPickPlaceEnv:
         self.push_timer[t] = 0.0
         self._write_ctrl()
 
-    # -- wrist camera -------------------------------------------------------
+    # -- 手首カメラ ---------------------------------------------------------
     def camera_rgb_uint8(self) -> torch.Tensor:
-        """(N, H, W, 3) uint8 wrist-camera frames.
+        """(N, H, W, 3) の uint8 手首カメラ画像。
 
-        One renderer, re-pointed at each environment's camera. MuJoCo renders
-        a single camera per call, so this is N calls per control step -- which
-        is why ``collect``/``distill`` shard across processes
-        (src/collect_data.py) instead of raising num_envs: on this project's
-        reference machine the graphics stack saturates at ~50 frames/s no
-        matter how the work is arranged (operations guide §5).
+        レンダラは1つで、環境ごとのカメラに向け直す。MuJoCo は1回の呼び出しで
+        カメラ1つしか描かないので、制御1ステップあたりN回になる。だから
+        ``collect``/``distill`` は num_envs を増やすのではなくプロセスで分割
+        する（src/collect_data.py）。基準機では、仕事をどう並べても
+        グラフィックスは毎秒約50フレームで飽和する。律速はそこにあり、
+        物理側ではない。
         """
         if not self.with_camera:
             raise RuntimeError("camera frames requested in a camera-free mode")
         if self._renderer is None:
             self._renderer = self.mujoco.Renderer(self.model, self._cam_h, self._cam_w)
-            # What the POLICY sees is a product decision, not a default:
-            #  * sites off  -- the TCP marker is a debugging aid drawn inside
-            #    the gripper; leaving it in would train the policy on a green
-            #    dot the real camera will never show it.
-            #  * shadows off -- MuJoCo's shadow map at this scale produces
-            #    aliased black blobs across the bench, which is texture the
-            #    policy can overfit and the real bench does not have. It also
-            #    costs render time, and rendering is this pipeline's
-            #    bottleneck (operations guide §5).
+            # 方策に何を見せるかは、既定値ではなく製品上の判断:
+            #  * サイトは消す。TCP のマーカーはグリッパの中に描かれるデバッグ
+            #    用で、残すと実カメラが絶対に見せない緑の点を手がかりに
+            #    学習してしまう。
+            #  * 影は消す。この縮尺の MuJoCo の影マップは、台の上にギザギザの
+            #    黒い塊を作る。方策が過適合できる模様で、実物の台には無い。
+            #    しかも描画時間を食い、描画はこのパイプラインの律速なので、
+            #    二重に損になる。
+            #    どちらも意図して切っている。
             self._cam_opt = self.mujoco.MjvOption()
             self._cam_opt.sitegroup[:] = 0
             self._renderer.scene.flags[self.mujoco.mjtRndFlag.mjRND_SHADOW] = 0
@@ -461,9 +461,9 @@ class MuJoCoPickPlaceEnv:
         return torch.from_numpy(out)
 
     def render_camera(self, cam_id: int, height: int, width: int) -> np.ndarray:
-        """Free-standing render (scene camera for the report video / viewer
-        screenshots). Kept separate from the wrist-camera path so the policy's
-        input resolution is never accidentally changed by a visualisation."""
+        """独立した描画（レポート動画やビューアのスクリーンショット用の
+        シーンカメラ）。手首カメラの経路と分けてあるので、可視化のために
+        方策の入力解像度が不意に変わることはない。"""
         r = self.mujoco.Renderer(self.model, height, width)
         try:
             r.update_scene(self.data, camera=cam_id)

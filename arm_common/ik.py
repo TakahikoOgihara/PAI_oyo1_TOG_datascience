@@ -1,27 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Damped least-squares (DLS) differential IK -- position only, batched.
+"""減衰最小二乗（DLS）の微分IK。位置のみ、バッチ対応。
 
-Replaces ``isaaclab.controllers.DifferentialIKController(ik_method="dls",
-command_type="position")``, which ARM_BCRL005 used in two places: the scripted
-expert (phase 1) and the MimicGen pose warp (phase 1.5). Both feed the SAME
-joint-delta action space, so the controller has to stay position-only and
-rate-limited exactly as it was -- the Raspberry Pi safety layer and every
-exported ONNX graph are defined on that action space.
-
-The algorithm is the standard one (Nakamura & Hanafusa 1986 / Wampler 1986):
+``isaaclab.controllers.DifferentialIKController(ik_method="dls",
+command_type="position")`` の置き換え。ARM_BCRL005 では2箇所で使って
+いた。スクリプトエキスパート（フェーズ1）と MimicGen の姿勢転写
+（フェーズ1.5）。どちらも同じ関節差分の行動空間に流すので、制御器は
+当時と同じく位置のみ・レート制限付きのままにしておく必要がある。
+Raspberry Pi の安全層と、書き出す ONNX は全部その行動空間の上で定義
+されているから。
+アルゴリズムは標準のもの（Nakamura & Hanafusa 1986 / Wampler 1986）:
 
     dq = J^T (J J^T + lambda^2 I)^-1 * (p_target - p_current)
 
-The damping term is what makes it usable near singularities -- an undamped
-pseudo-inverse produces unbounded joint velocities when the arm straightens,
-and a 280 mm 6-DoF arm reaching to 250 mm is close to its boundary for much of
-this task. ``lambda = 0.05`` is Isaac Lab's own default.
+特異点の近くで使えるのは減衰項のおかげ。減衰のない擬似逆行列は、
+アームが伸びきると無制限の関節速度を出す。280mm の6自由度アームが
+250mm へ手を伸ばすこのタスクでは、かなりの時間を境界の近くで過ごす。
+``lambda = 0.05`` は Isaac Lab 自身の既定値。
 
-Jacobian source: ``arm_common.kinematics.ToolKinematics.tcp_jacobian`` --
-analytic, derived from ``deploy/raspi/mycobot_fk.py``. There is exactly one
-kinematic chain in this project and every consumer reads it.
+ヤコビアンの出どころは ``arm_common.kinematics.ToolKinematics.tcp_jacobian``。
+解析的で、``deploy/raspi/mycobot_fk.py`` から導いている。この
+プロジェクトに運動学の連鎖は1本だけで、全員がそれを読む。
 
-Self-test (torch only, no simulator):
+自己テスト（torch だけ。シミュレータ不要）:
     python3 arm_common/ik.py
 """
 
@@ -40,17 +40,17 @@ from arm_common.kinematics import ToolKinematics, NUM_ARM_JOINTS  # noqa: E402
 
 
 class DLSPositionIK:
-    """(N,6) joints + (N,3) target TCP position -> (N,6) desired joints."""
+    """(N,6) の関節 + (N,3) の目標TCP位置 -> (N,6) の目標関節。"""
 
     def __init__(self, kin: ToolKinematics, damping: float = 0.05,
                  max_step: float = 0.20):
         self.kin = kin
         self.damping = float(damping)
-        # cap on |dq| per call. The expert already rate-limits its cartesian
-        # target ("carrot"), but a target the arm cannot reach at all would
-        # otherwise ask for an arbitrarily large joint step, and the action
-        # term would spend several control steps un-winding a command that was
-        # never physically meaningful.
+        # 1回の呼び出しでの |dq| の上限。エキスパート側も直交座標の目標を
+        # レート制限（人参）しているが、そもそも届かない目標を渡されると、
+        # いくらでも大きな関節ステップを要求してしまう。そして行動項は、
+        # 物理的に意味のなかった指令を解くのに制御ステップを何回も
+        # 費やすことになる。
         self.max_step = float(max_step)
 
     def solve(self, q: torch.Tensor, target_pos: torch.Tensor) -> torch.Tensor:
@@ -70,7 +70,7 @@ def _self_test() -> None:
     kin.assert_matches_reference()
     ik = DLSPositionIK(kin)
 
-    # converge from the ready pose onto a batch of reachable targets
+    # ready 姿勢から、到達できる目標のバッチへ収束させる
     from arm_common.kinematics import HOME_Q
     n = 16
     q = torch.tensor([list(HOME_Q)] * n, dtype=torch.float32)
@@ -82,8 +82,7 @@ def _self_test() -> None:
           f"mean {err.mean() * 1000:.3f} mm, max {err.max() * 1000:.3f} mm")
     assert float(err.max()) < 1e-3, err
 
-    # singular configuration: must stay finite, which is the whole point of
-    # the damping term
+    # 特異姿勢。有限に留まらなければならず、それが減衰項の目的そのもの
     q_sing = torch.zeros(1, NUM_ARM_JOINTS)
     q_out = ik.solve(q_sing, kin.tcp_pos(q_sing) + torch.tensor([[0.3, 0.0, 0.0]]))
     assert torch.isfinite(q_out).all() and float((q_out - q_sing).norm()) <= 0.21

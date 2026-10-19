@@ -1,54 +1,54 @@
-# THE STUDY: does MimicGen help? does domain randomisation help? do they
-# compose? (design notes §5, project report §4)
+# 比較実験。MimicGen は効くのか、ドメインランダム化は効くのか、
+# その2つは組み合わさるのか。
 #
-# Four TRAINING conditions, the 2x2 over the two data-side interventions:
-#     A  baseline     mimicgen=off  DR=off
-#     B  mimicgen     mimicgen=on   DR=off
-#     C  dr           mimicgen=off  DR=on
-#     D  mimicgen+dr  mimicgen=on   DR=on
+# 学習側の4条件。データ側の2つの介入の 2x2:
+#     A  baseline     mimicgen=なし  DR=なし
+#     B  mimicgen     mimicgen=あり  DR=なし
+#     C  dr           mimicgen=なし  DR=あり
+#     D  mimicgen+dr  mimicgen=あり  DR=あり
 #
-# Each trained policy is then evaluated on BOTH test environments:
-#     nominal      DR off  -- "the bench exactly as modelled"
-#     randomised   DR on   -- "the bench with honest uncertainty in mass,
-#                             friction, servo gains, start pose, lighting and
-#                             clutter"
+# 学習した方策は、2つの試験環境の両方で評価する:
+#     nominal      DR なし。「モデル化したとおりのベンチ」
+#     randomised   DR あり。「質量、摩擦、サーボゲイン、初期姿勢、
+#                             照明、置き物に、正直な不確かさを
+#                             入れたベンチ」
 #
-# EVALUATING ON BOTH IS THE POINT. A single test environment cannot separate
-# "this intervention made the policy better" from "this intervention made the
-# test easier or harder", and a DR-trained policy measured only on a nominal
-# bench will look WORSE than a baseline that overfit to it. The 4x2 grid is
-# what turns four numbers into a conclusion a client can act on.
+# 両方で測ることが要点。試験環境が1つだと「介入で方策が良くなった」と
+# 「介入で試験が易しく（難しく）なった」を区別できない。公称ベンチだけで
+# 測ると、DRで学習した方策は、そこに過適合したベースラインより悪く見える。
+# 4x2 の格子は、4つの数字を客が行動に移せる結論に変えるためにある。
+# 単一の数値を並べるだけでは、そこまで届かない。
 #
-# The comparison runs on the BC stage (phases 1 -> 1.5 -> 2 -> 3 -> 4). That is
-# deliberate and it is the cheap, clean place to measure: both interventions
-# act on the DATASET, and BC is the one stage whose output is a pure function
-# of the dataset. Putting PPO or the ACT distillation in the loop would add two
-# more stochastic stages between cause and effect -- and would cost 4x the
-# whole pipeline instead of 4x twelve minutes.
+# 比較は BC 段（フェーズ 1 -> 1.5 -> 2 -> 3 -> 4）で回す。意図的で、ここが
+# 安くて綺麗に測れる場所。2つの介入はどちらもデータセットに作用し、BC は
+# 出力がデータセットの純粋な関数になる唯一の段だから。PPO や ACT の蒸留を
+# 輪の中に入れると、原因と結果の間に確率的な段が2つ増え、コストは12分の
+# 4倍ではなくパイプライン全体の4倍になる。
+# だからここで測る。
 enable_conditions: [baseline, mimicgen, dr, mimicgen_dr]
-# src/ablation.py also defines a DECOMPOSITION of the DR axis, off by default:
+# src/ablation.py には DR 軸の分解も定義してある。既定ではOFF:
 #   dr_pose / dr_physics / mg_dr_pose / mg_dr_physics
-# "DR helps" is not actionable -- the next question is WHICH part helped, and
-# the answer decides what has to be measured on the real bench. Run it into its
-# own directory so it does not overwrite the 2x2:
+# 「DRは効く」では行動に移せない。次の問いは「どの部分が効いたのか」で、
+# その答えが実機ベンチで何を測るべきかを決める。2x2 を上書きしないよう、
+# 専用ディレクトリに出すこと:
 #   bash run_ablation.sh ablation.enable_conditions=[dr_pose,dr_physics] \
 #        ablation.out_dir=artifacts/ablation_dr
 eval_regimes: [nominal, randomised]
-seeds: [0, 1, 2]          # each condition is trained and evaluated under this
-                          # many seeds. A success-rate difference measured once
-                          # on 256 episodes has a +-3 pp standard error before
-                          # seed variance is counted at all; reporting a mean
-                          # and a spread is the difference between a result and
-                          # an anecdote.
-collect_episodes: 6       # per-env batches for the ablation's phase 1
-bc_epochs: 100            # ablation runs are shorter than the full pipeline's
-                          # 150 epochs; identical across conditions, which is
-                          # what matters for a comparison
-eval_episodes: 4          # x eval.num_envs (64) = 256 episodes per cell
-match_data: false         # true = subsample every condition's dataset down to
-                          # the smallest one's transition count before training.
-                          # MimicGen adds DATA VOLUME as well as DATA DIVERSITY,
-                          # and with this false the B/D columns enjoy both. Run
-                          # it both ways: the gap between them is exactly "how
-                          # much of MimicGen's gain is just more rows".
+seeds: [0, 1, 2]          # 各条件をこのシード数ぶん学習・評価する。
+                          # 256エピソードで1回測った成功率の差には、シード間の
+                          # ばらつきを数える前から±3ポイントの標準誤差がある。
+                          # 平均とばらつきを併記するかどうかが、結果と逸話の
+                          # 違いになるので、ここは1より大きくしておく。
+                          # 急ぐときだけ ablation.seeds=[0] にする。
+collect_episodes: 6       # 比較実験のフェーズ1で使う、環境ごとのバッチ数
+bc_epochs: 100            # 比較実験の学習は、フルパイプラインの150エポック
+                          # より短い。条件間で同一であることが、比較では
+                          # 重要になる
+eval_episodes: 4          # x eval.num_envs (64) = セルあたり256エピソード
+match_data: false         # true = 学習前に、全条件のデータセットを最小の
+                          # 条件の遷移数まで間引く。MimicGen はデータの
+                          # 多様性だけでなく量も増やすので、false だと
+                          # B/D 列は両方の恩恵を受ける。両方で回すこと。
+                          # その差が「MimicGen の利得のうち、どれだけが
+                          # 単に行数のおかげか」になる。
 out_dir: artifacts/ablation

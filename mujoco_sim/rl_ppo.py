@@ -1,44 +1,44 @@
 # -*- coding: utf-8 -*-
-"""Phase 6 -- PPO fine-tuning FROM the BC policy (stable-baselines3).
+"""フェーズ6。BC 方策から始める PPO 微調整（stable-baselines3）。
 
-WHY THIS PHASE EXISTS. BC is capped by its demonstrator: the scripted expert is
-the ceiling, and a cloned policy is strictly worse than what it cloned. PPO
-from scratch, on the other hand, burns hours rediscovering what the
-demonstrations already knew. Initialising PPO from the BC weights takes both --
-and the delta is MEASURED (src/rl_finetune.py compares the two eval reports),
-not asserted. ``rl.bc_init=false`` quantifies exactly what the initialisation
-buys.
+このフェーズが要る理由。BC は教師役で上限が決まる。スクリプト
+エキスパートが天井で、複製した方策は複製元より必ず悪い。一方で PPO を
+ゼロから回すと、デモが既に知っていたことを再発見するのに何時間も
+燃やす。BC の重みから初期化すれば両方取れる。そして差は実測する
+（src/rl_finetune.py が2つの評価結果を比べる）。主張では済ませない。
+``rl.bc_init=false`` にすれば、初期化が何を買っているかを正確に
+数値化できる。
 
-WHY THE FOUR STABILISERS. ARM_BCRL005's first real run watched a BC policy at
-success 0.606 collapse to 0.000 over 600 iterations. It was not reward hacking
-and not entropy collapse: the CRITIC diverged. A randomly initialised value head
-facing BC-policy returns of 800-1900 produced a value loss of 4e4, so
-``advantage = returns - values`` was noise and PPO faithfully followed it. Once
-the policy stops succeeding, the sparse success gradient is gone and it never
-comes back. The fixes, in order of effect:
+4つの安定化策の理由。ARM_BCRL005 の最初の本番は、成功率0.606の BC
+方策が600反復で 0.000 まで崩れるのを見ることになった。報酬ハックでも
+エントロピー崩壊でもなく、クリティックが発散した。ランダム初期化の
+価値ヘッドが BC 方策の 800〜1900 のリターンに当たって価値損失 4e4 を
+出し、``advantage = returns - values`` はノイズになり、PPO は忠実に
+それを追った。方策が成功しなくなると疎な成功勾配は消え、二度と
+戻らない。効いた順に対処を挙げる:
 
-  1. RETURN NORMALISATION -- put the critic's regression target at O(1).
-     ``VecNormalize(norm_reward=True)`` is the library's own implementation of
-     exactly what ARM_BCRL005 hand-rolled.
-  2. CRITIC WARM-UP -- freeze the actor for the first N iterations so the value
-     function catches up before anything is allowed to change the policy.
-  3. A SMALLER LEARNING RATE -- 3e-4 is a from-scratch number.
-  4. BC ANCHOR -- an auxiliary gradient step pulling the actor back toward the
-     BC snapshot, on the states the rollout actually visited, decayed to zero so
-     RL can still surpass BC. Same idea as the KL-to-SFT penalty in RLHF, and as
-     DAPG's BC gradient term (Rajeswaran et al. 2018).
+  1. リターン正規化。クリティックの回帰目標を O(1) にする。
+     ``VecNormalize(norm_reward=True)`` は、ARM_BCRL005 で手書きしたものと
+     同じことをするライブラリ自身の実装。
+  2. クリティックのウォームアップ。最初のN反復はアクターを凍結し、
+     方策を動かす前に価値関数を追いつかせる。
+  3. 学習率を小さくする。3e-4 はゼロから回すときの値。
+  4. BC アンカー。ロールアウトが実際に通った状態の上で、アクターを BC の
+     スナップショットへ引き戻す補助的な勾配ステップ。0へ減衰させるので、
+     RL は最終的に BC を超えられる。RLHF の KL-to-SFT 罰則、DAPG の BC
+     勾配項（Rajeswaran et al. 2018）と同じ考え方。
 
-The decay is applied to the anchor optimiser's LEARNING RATE, not to the loss
-coefficient. That distinction cost ARM_BCRL005 a run: Adam's update
-``lr * m / (sqrt(v) + eps)`` is INVARIANT to a constant scaling of the loss, so
-ramping a coefficient 1.0 -> 0.0 does nothing until it is exactly zero, at which
-point the constraint vanishes off a cliff. What is meant to decay is step size.
+減衰させるのはアンカーの最適化器の学習率で、損失の係数ではない。
+この区別は ARM_BCRL005 で1本の実行を潰した。Adam の更新
+``lr * m / (sqrt(v) + eps)`` は損失の定数倍に対して不変なので、係数を
+1.0 -> 0.0 と落としても、正確に0になる瞬間まで何も起きず、そこで
+制約が崖のように消える。減衰させたいのは歩幅の方。
 
-WHY STABLE-BASELINES3 AND NOT RSL-RL (ARM_BCRL005's choice): RSL-RL's runner is
-written against Isaac Lab's vectorised-env wrapper and is not usable outside it.
-SB3 is the mainstream general-purpose RL library, its ``VecEnv`` contract is
-stable and documented, it writes TensorBoard scalars natively, and the algorithm
-is the same clipped-objective PPO.
+RSL-RL（ARM_BCRL005 の選択）ではなく stable-baselines3 を使う理由。
+RSL-RL のランナーは Isaac Lab のベクトル化環境ラッパー前提で書かれて
+いて、その外では使えない。SB3 は汎用RLライブラリの主流で、``VecEnv``
+の契約は安定して文書化されており、TensorBoard のスカラーも自分で書く。
+アルゴリズムは同じクリップ目的の PPO。
 """
 
 from __future__ import annotations
@@ -71,11 +71,11 @@ OBS_DIM, ACT_DIM = 31, 7
 
 # ---------------------------------------------------------------------------
 class MjVecEnv(VecEnv):
-    """SB3 ``VecEnv`` over ``MuJoCoPickPlaceEnv``.
+    """``MuJoCoPickPlaceEnv`` に対する SB3 の ``VecEnv``。
 
-    The environment is ALREADY vectorised and already auto-resets, so this is a
-    thin adapter rather than a wrapper stack: no SubprocVecEnv, no per-env
-    Python objects, one ``mj_step`` for the whole batch.
+    環境はすでにベクトル化されていて自動リセットもするので、これは
+    ラッパーの積み重ねではなく薄い変換。SubprocVecEnv も、環境ごとの
+    Python オブジェクトも無く、バッチ全体で ``mj_step`` が1回。
     """
 
     def __init__(self, env):
@@ -99,10 +99,10 @@ class MjVecEnv(VecEnv):
         infos = [{} for _ in range(self.num_envs)]
         for i in np.nonzero(dones)[0]:
             i = int(i)
-            # SB3 bootstraps the value of a TRUNCATED episode and does not
-            # bootstrap a TERMINATED one. Success here is a true terminal state;
-            # a timeout is not, and mislabelling the two biases every return
-            # estimate near the horizon.
+            # SB3 は打ち切り（truncated）エピソードの価値をブートストラップし、
+            # 終了（terminated）ではしない。ここでの成功は真の終端状態で、
+            # タイムアウトはそうではない。2つを取り違えると、ホライズン付近の
+            # リターン推定が全部偏る。
             infos[i]["TimeLimit.truncated"] = bool(trunc[i]) and not bool(term[i])
             infos[i]["terminal_observation"] = flat[i]
         return flat, rew.numpy().astype(np.float32), dones, infos
@@ -128,7 +128,7 @@ class MjVecEnv(VecEnv):
 
 # ---------------------------------------------------------------------------
 class BCAnchor:
-    """The auxiliary gradient step toward the BC snapshot (module docstring)."""
+    """BC のスナップショットへ引き戻す補助的な勾配ステップ（詳細は冒頭）。"""
 
     def __init__(self, actor, reference, lr: float, coef: float, decay_iters: int,
                  minibatch: int, max_grad_norm: float, start_iter: int,
@@ -142,8 +142,8 @@ class BCAnchor:
         self.max_grad_norm = float(max_grad_norm)
         self.start_iter = int(start_iter)
         self.base_lr = float(lr)
-        # its own optimiser: the anchor must not perturb PPO's schedule, and
-        # PPO's adaptive learning rate must not perturb the anchor's decay
+        # 専用の最適化器を持たせる。アンカーが PPO のスケジュールを乱して
+        # はならず、PPO の適応的な学習率がアンカーの減衰を乱してもならない
         self.optimizer = torch.optim.Adam(actor.parameters(), lr=self.base_lr)
 
     def coef_at(self, it: int) -> float:
@@ -156,7 +156,7 @@ class BCAnchor:
         coef = self.coef_at(it)
         if coef <= 0.0 or obs is None or obs.shape[0] == 0:
             return 0.0
-        for g in self.optimizer.param_groups:      # decay the STEP SIZE
+        for g in self.optimizer.param_groups:      # 減衰させるのは歩幅
             g["lr"] = self.base_lr * (coef / self.coef if self.coef > 0 else 0.0)
         idx = torch.randint(0, obs.shape[0], (min(self.minibatch, obs.shape[0]),),
                             device=obs.device)
@@ -172,7 +172,7 @@ class BCAnchor:
 
 
 class StabilisedPPO(PPO):
-    """PPO + critic warm-up + BC anchor. Everything else is stock SB3."""
+    """PPO + クリティックのウォームアップ + BC アンカー。他は素の SB3。"""
 
     def setup_stabilisers(self, critic_warmup: int, anchor: BCAnchor | None) -> None:
         self.critic_warmup = int(critic_warmup)
@@ -195,8 +195,8 @@ class StabilisedPPO(PPO):
                   f"{'FROZEN (critic warm-up)' if warm else 'unfrozen'}", flush=True)
         super().train()
         if self.anchor is not None and not warm:
-            # anchor on the states the rollout ACTUALLY visited: constraining
-            # the policy on random observations constrains it where it never goes
+            # ロールアウトが実際に通った状態でアンカーする。ランダムな観測で
+            # 方策を縛るのは、絶対に行かない場所で縛ること
             obs = torch.as_tensor(
                 self.rollout_buffer.observations.reshape(-1, OBS_DIM),
                 dtype=torch.float32, device=self.device)
@@ -206,13 +206,13 @@ class StabilisedPPO(PPO):
 
 
 class PolicyCheckpoint(BaseCallback):
-    """Save the POLICY STATE DICT, not an SB3 ``.zip``.
+    """SB3 の ``.zip`` ではなく、方策の state dict を保存する。
 
-    The actor head is modified after construction (a tanh is appended to match
-    robomimic's squashed output), so ``PPO.load`` would rebuild a policy whose
-    parameter NAMES no longer match the archive. A state dict loaded back into
-    the same, already-modified policy object has no such problem -- and it is
-    what the checkpoint sweep needs anyway.
+    アクターのヘッドは構築後に書き換えている（robomimic の押し潰した
+    出力に合わせて tanh を足す）ので、``PPO.load`` はパラメータ名の合わない
+    方策を組み立ててしまう。すでに書き換え済みの同じ方策オブジェクトへ
+    state dict を読み込むならその問題は起きないし、チェックポイントの
+    総当たり評価に必要なのもそちら。
     """
 
     def __init__(self, save_path: str, every_iters: int, rollout_steps: int, num_envs: int):
@@ -234,10 +234,10 @@ class PolicyCheckpoint(BaseCallback):
 
 
 class WandbScalars(BaseCallback):
-    """Mirror SB3's logger into W&B so training is watchable LIVE, not only
-    afterwards. TensorBoard receives the same scalars natively (SB3 writes them
-    itself) and MLflow receives the summary at the end -- three tools, three
-    jobs (configs/mlops/default.yaml)."""
+    """SB3 のロガーを W&B に写して、学習を後からではなく進行中に見られる
+    ようにする。TensorBoard は同じスカラーを自前で受け（SB3 が自分で
+    書く）、MLflow は最後に要約を受ける。3つの道具に3つの仕事
+    （configs/mlops/default.yaml）。"""
 
     def __init__(self, wb):
         super().__init__()
@@ -256,7 +256,7 @@ class WandbScalars(BaseCallback):
 
 
 class OnnxActor(nn.Module):
-    """Deterministic policy graph: obs -> action. What actually ships."""
+    """決定的な方策グラフ。obs -> action。実際に出荷するもの。"""
 
     def __init__(self, policy):
         super().__init__()
@@ -298,11 +298,11 @@ def _bc_actor(ckpt_path: str, device):
 
 
 def init_actor_from_bc(model, ckpt_path: str, device) -> int:
-    """Copy the robomimic BC MLP into the PPO actor, layer by layer.
+    """robomimic の BC の MLP を、層ごとに PPO のアクターへ写す。
 
-    Requires identical shapes, which ``bc.hidden == rl.hidden`` and
-    ``rl.activation=relu`` guarantee; anything else is a configuration bug and
-    is raised rather than silently half-copied.
+    形が同じであることが条件で、``bc.hidden == rl.hidden`` と
+    ``rl.activation=relu`` がそれを保証する。違っていれば設定の間違いなので、
+    黙って半分だけ写すのではなく例外にする。
     """
     src = _linears(_bc_actor(ckpt_path, device))
     dst = _linears(model.policy.mlp_extractor.policy_net) + _linears(model.policy.action_net)
@@ -322,10 +322,10 @@ def init_actor_from_bc(model, ckpt_path: str, device) -> int:
 
 
 def verify_bc_transfer(model, ckpt_path: str, device, samples: int = 512) -> float:
-    """max |PPO_actor(obs) - BC(obs)| over random observations.
+    """ランダムな観測に対する max |PPO_actor(obs) - BC(obs)|。
 
-    The transfer is the premise of this phase; measuring it turns "we
-    initialised from BC" into a number that lands in the MLflow run.
+    重みの移植がこのフェーズの前提なので、それを測れば「BC から
+    初期化した」が MLflow の run に載る数値になる。
     """
     bc = _bc_actor(ckpt_path, device)
     x = torch.randn(samples, OBS_DIM, device=device)
@@ -351,10 +351,10 @@ def make_ppo(venv, cfg, device, tb_dir: str) -> StabilisedPPO:
                            activation_fn=act, features_extractor_class=FlattenExtractor,
                            log_std_init=float(np.log(float(r.init_noise_std)))))
     if str(r.output_activation) == "tanh":
-        # robomimic's BC head squashes with tanh. Giving the PPO actor the same
-        # head is what makes the transferred weights reproduce the BC policy
-        # EXACTLY -- without it the initialisation is merely "similar", which is
-        # not something verify_bc_transfer could check.
+        # robomimic の BC ヘッドは tanh で押し潰す。PPO のアクターに同じ
+        # ヘッドを付けることが、移植した重みが BC 方策を正確に再現する
+        # 条件。付けないと初期化は「似ている」だけになり、
+        # verify_bc_transfer が確認できるものではなくなる。
         model.policy.action_net = nn.Sequential(model.policy.action_net, nn.Tanh()).to(device)
         model.policy.optimizer = model.policy.optimizer_class(
             model.policy.parameters(), lr=float(r.lr), **model.policy.optimizer_kwargs)
@@ -396,8 +396,8 @@ def train_ppo(cfg, args_cli, make_env, evaluate_policy) -> None:
                 f"the PPO actor does not reproduce the BC policy (max diff {err:.3e}). "
                 "The initialisation is the premise of this phase -- fix the layer "
                 "shapes / activations before spending the compute.")
-        # the reference must be the actor AS TRANSFERRED: snapshotting it after
-        # training starts anchors to an already-degraded policy
+        # 基準にするのは「移植した直後のアクター」。学習が始まった後で
+        # スナップショットを取ると、すでに劣化した方策に縛ることになる
         reference = copy.deepcopy(_actor_module(model)).eval()
         for p in reference.parameters():
             p.requires_grad_(False)
@@ -432,10 +432,9 @@ def train_ppo(cfg, args_cli, make_env, evaluate_policy) -> None:
         final = os.path.join(runs_dir, "model_final.pt")
         torch.save(model.policy.state_dict(), final)
 
-        # RL does not improve monotonically. Sweep the saved checkpoints in
-        # CLOSED LOOP and ship the best -- ARM_BCRL005 learned this the
-        # expensive way, by shipping a final iteration worse than the BC policy
-        # it started from.
+        # RL は単調に良くならない。保存したチェックポイントを閉ループで
+        # 総当たりし、最良を出荷する。ARM_BCRL005 は、出発点の BC 方策より
+        # 悪い最終反復を出荷して、これを高い授業料で学んだ。
         ckpt_path = final
         if bool(r.select_best_checkpoint):
             ckpt_path = _sweep_checkpoints(model, env, runs_dir, cfg, eval_dir,
@@ -469,7 +468,7 @@ def _sweep_checkpoints(model, env, runs_dir: str, cfg, eval_dir: str, evaluate_p
     for p in paths:
         model.policy.load_state_dict(
             torch.load(p, map_location=device, weights_only=True))
-        # every checkpoint sees the SAME scenes (paired comparison)
+        # どのチェックポイントも同じシーンを見る（対応のある比較）
         mt = evaluate_policy(env, _policy_act_fn(model), int(cfg.eval.episodes),
                              int(cfg.eval.max_steps), seed=7000 + int(cfg.seed))
         rows.append({"checkpoint": p, **mt})
@@ -492,13 +491,13 @@ def _sweep_checkpoints(model, env, runs_dir: str, cfg, eval_dir: str, evaluate_p
 
 def _evaluate_and_publish(model, env, cfg, ckpt_path, bc_ckpt, deploy_dir, eval_dir,
                           evaluate_policy, wb) -> dict:
-    """Evaluate, export ONNX, register -- and REFUSE to overwrite the deployed
-    teacher with a policy that measures worse than BC.
+    """評価して ONNX を書き出して登録する。そして BC より悪い方策で
+    配備済みの教師を上書きすることを拒否する。
 
-    The guard runs BEFORE the ONNX is written. ARM_BCRL005 had it after, so a
-    regressed policy still overwrote ``*_rl_policy.onnx`` -- and phase 7 reads
-    that FILE, not the registry alias, so the guard reported success while the
-    teacher was already poisoned.
+    ガードは ONNX を書く前に走る。ARM_BCRL005 では後ろにあったので、
+    劣化した方策でも ``*_rl_policy.onnx`` を上書きしてしまっていた。
+    フェーズ7が読むのはレジストリの別名ではなくそのファイルなので、
+    ガードは成功を報告しつつ、教師はすでに汚染されていた。
     """
     import mlflow
 

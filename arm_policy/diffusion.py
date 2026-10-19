@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
-"""Diffusion Policy (Chi et al., RSS 2023) -- compact self-contained variant
-for ARM_BCRL005 (config switch: visuomotor.type=diffusion).
+"""Diffusion Policy（Chi et al., RSS 2023）の、ARM_BCRL005 向けの小さな
+自己完結版（設定の切り替えは visuomotor.type=diffusion）。
 
-Role: the comparison/upgrade path next to ACT. Diffusion policies model
-MULTIMODAL action distributions (several valid ways to approach a grasp)
-better than a deterministic CVAE decode, at the cost of `ddim_steps`
-denoiser forwards per decision -- roughly an order of magnitude more edge
-compute than ACT's single pass, which is exactly why ACT is the deployed
-default on the 8 GB Jetson Orin Nano (design notes).
+役割は ACT の隣に置く比較と発展の経路。拡散方策は多峰の行動分布
+（把持へ寄るやり方が複数ある状況）を、決定的な CVAE のデコードより
+うまく表せる。代償は1回の判断につき `ddim_steps` 回のデノイザ順伝播で、
+ACT の1回に対してエッジ側の計算が概ね1桁増える。だから 8GB の Jetson
+Orin Nano で配備する既定は ACT の方。
 
-Structure (faithful, minimal):
-  * ObsEncoder: ResNet18 (shared code with ACT) + qpos MLP -> obs embedding
-  * eps-denoiser: 1D temporal UNet over the action chunk, FiLM-conditioned
-    on (sinusoidal timestep embedding + obs embedding)
-  * training: DDPM epsilon-prediction, squaredcos_cap_v2 noise schedule
-  * inference: deterministic DDIM with ddim_steps steps
+構造（忠実かつ最小限）:
+  * ObsEncoder: ResNet18（ACT とコードを共有）+ qpos の MLP -> 観測埋め込み
+  * eps デノイザ: 行動チャンクに対する1次元時間 UNet。(正弦の時刻
+    埋め込み + 観測埋め込み) で FiLM 条件付け
+  * 学習: DDPM のイプシロン予測、squaredcos_cap_v2 のノイズスケジュール
+  * 推論: 決定的な DDIM を ddim_steps 回
 
-ONNX deployment is TWO graphs -- <name>.onnx (encoder: rgb,qpos->obs_emb; the
-expensive part runs ONCE per chunk) and <name>_denoiser.onnx (the DDIM loop
-body). The consumers (sim eval's OnnxPolicy and deploy/jetson/policy_runtime)
-share the same schedule via the ONNX metadata (diffusion_steps / ddim_steps)
-and the schedule function below.
+ONNX の配備はグラフ2つ。<name>.onnx（エンコーダ。rgb,qpos->obs_emb。
+高い部分はチャンクにつき1回だけ走る）と <name>_denoiser.onnx（DDIM の
+ループ本体）。利用側（シミュレータ評価の OnnxPolicy と
+deploy/jetson/policy_runtime）は、ONNX のメタデータ
+（diffusion_steps / ddim_steps）と下のスケジュール関数で歩調を合わせる。
 """
 
 from __future__ import annotations
@@ -34,8 +33,8 @@ from .act import _ImagePreproc, _resnet18_backbone
 
 
 def cosine_alphas_cumprod(diffusion_steps: int) -> np.ndarray:
-    """squaredcos_cap_v2 -- MUST stay identical to the DDIM samplers in
-    mujoco_sim/train_arm_mujoco.py and deploy/jetson/policy_runtime.py."""
+    """squaredcos_cap_v2。mujoco_sim/train_arm_mujoco.py と
+    deploy/jetson/policy_runtime.py の DDIM サンプラと必ず一致させること。"""
     s = 0.008
     t = np.arange(diffusion_steps + 1, dtype=np.float64) / diffusion_steps
     f = np.cos((t + s) / (1 + s) * np.pi / 2) ** 2
@@ -90,8 +89,8 @@ class _FiLMBlock(nn.Module):
 
 
 class EpsDenoiser(nn.Module):
-    """1D temporal UNet: (B, chunk, act) noisy actions + timestep + obs_emb
-    -> predicted noise (B, chunk, act)."""
+    """1次元時間 UNet。(B, chunk, act) のノイズ入り行動 + 時刻 + obs_emb
+    -> 予測したノイズ (B, chunk, act)。"""
 
     def __init__(self, act_dim: int, obs_embed_dim: int = 256,
                  down_dims=(256, 512), time_dim: int = 128):
@@ -151,8 +150,8 @@ class DiffusionPolicy(nn.Module):
     @torch.no_grad()
     def sample(self, rgb: torch.Tensor, qpos: torch.Tensor,
                generator: torch.Generator | None = None) -> torch.Tensor:
-        """Deterministic DDIM sampling (torch mirror of the deployed numpy
-        loops -- used for validation)."""
+        """決定的な DDIM サンプリング（配備する numpy のループを torch で
+        写したもの。検証用）。"""
         B = rgb.shape[0]
         obs_emb = self.encoder(rgb, qpos)
         ts = np.linspace(self.diffusion_steps - 1, 0, self.ddim_steps).round().astype(np.int64)

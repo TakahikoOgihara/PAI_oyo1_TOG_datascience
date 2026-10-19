@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Headless (Agg) matplotlib helpers for training curves, evaluation
-dashboards, trajectory maps and dataset analysis.  All functions save a PNG and
-return its path so the pipeline produces reviewable artifacts on the server.
+"""ヘッドレス（Agg）の matplotlib 補助。学習曲線、評価のダッシュボード、
+軌跡の図、データセットの分析用。どの関数も PNG を保存してそのパスを
+返すので、パイプラインはサーバー上でも査読できる成果物を残す。
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def plot_training_curves(metrics_csv: str, out_path: str, x: str = "step",
 
 def bar_compare(data: dict, metric_keys: list[str], out_path: str,
                 title: str = "Comparison"):
-    """data: {method_name: {metric: value}}."""
+    """data: {手法名: {指標: 値}}。"""
     methods = list(data.keys())
     n = len(metric_keys)
     fig, axes = plt.subplots(1, n, figsize=(3.6 * n, 3.6), squeeze=False)
@@ -68,7 +68,7 @@ def bar_compare(data: dict, metric_keys: list[str], out_path: str,
 
 def plot_trajectories(trajs, walls, goal, start, out_path,
                       title="Closed-loop trajectories"):
-    """trajs: list of [T,2] arrays; walls: [W,4] (cx,cy,hx,hy)."""
+    """trajs は [T,2] 配列のリスト。walls は [W,4] (cx,cy,hx,hy)。"""
     fig, ax = plt.subplots(figsize=(6, 6))
     for w in walls:
         cx, cy, hx, hy = w
@@ -93,7 +93,7 @@ def plot_trajectories(trajs, walls, goal, start, out_path,
 
 
 def hist_grid(arrays: dict, out_path: str, title="Dataset analysis", bins=40):
-    """arrays: {name: 1d np array}."""
+    """arrays: {名前: 1次元の np 配列}。"""
     keys = list(arrays.keys())
     n = len(keys)
     cols = min(4, n)

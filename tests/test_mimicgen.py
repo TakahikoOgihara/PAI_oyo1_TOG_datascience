@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""MimicGen: the equation, the segmentation, and the round trip through HDF5.
+"""MimicGen。式、区切り、そして HDF5 を通した往復。
 
-These are the pieces that make phase 1.5 correct rather than merely plausible.
-The generation LOOP is validated by the pipeline itself (the yield gate), but
-the geometry has to be right before a yield number means anything.
+フェーズ1.5を「たぶん合っている」ではなく「正しい」にしている部分。
+生成のループはパイプライン自身（歩留まりのゲート）が検証するが、
+歩留まりの数字に意味が出る前に、幾何が合っていないといけない。
 """
 
 import numpy as np
@@ -31,9 +31,8 @@ def _fake_demo(T=90, grasp_at=40, obj=(0.20, -0.03, 0.015)):
 
 
 def test_equation_1_preserves_the_relative_geometry():
-    """The whole method is: what the demonstration encodes is the tool's pose
-    RELATIVE to the object. Moving the object must move the trajectory with it
-    and change nothing else."""
+    """手法の全体はこう。デモが符号化しているのは、物体に対するツールの
+    相対姿勢。物体を動かせば軌跡も一緒に動き、他は何も変わらない。"""
     T_src = make_pose(np.array([0.20, -0.03, 0.015]))
     traj = np.tile(np.eye(4), (12, 1, 1))
     traj[:, :3, :3] = np.diag([1.0, -1.0, -1.0])
@@ -51,8 +50,8 @@ def test_subtask_segmentation_uses_the_gripper_signal():
     sig = grasp_signal(act[:, 6].numpy())
     assert sig is not None and sig.shape == (90, 1)
     assert int(np.argmax(sig[:, 0] > 0)) == 40
-    # a demo without a clean open->closed->open cycle is DROPPED, not repaired:
-    # MimicGen's philosophy is "generate a lot, keep what is valid"
+    # 開->閉->開 の綺麗なサイクルが無いデモは、直さずに捨てる。
+    # MimicGen の考え方は「たくさん作って、妥当なものを残す」
     assert grasp_signal(np.ones(90)) is None
     assert grasp_signal(-np.ones(90)) is None
 
@@ -67,8 +66,8 @@ def test_annotated_hdf5_round_trip(tmp_path):
     assert len(pool.episodes) == 2 and pool.num_subtasks == 2
     lo0, hi0 = pool.episodes[0]["bounds"][0]
     lo1, hi1 = pool.episodes[0]["bounds"][1]
-    assert lo0 == 0 and hi0 == lo1 and hi1 == obs.shape[0]      # subtasks tile the demo
-    assert hi0 - lo0 > 0 and hi1 - lo1 > 0                      # and neither is empty
+    assert lo0 == 0 and hi0 == lo1 and hi1 == obs.shape[0]      # サブタスクがデモを覆う
+    assert hi0 - lo0 > 0 and hi1 - lo1 > 0                      # そしてどちらも空でない
 
 
 def test_planner_bridges_without_a_jump(tmp_path):
@@ -81,10 +80,10 @@ def test_planner_bridges_without_a_jump(tmp_path):
     assert len(poses) == len(grip)
     steps = np.linalg.norm(np.diff(
         np.vstack([here[:3, 3][None], poses[:, :3, 3]]), axis=0), axis=1)
-    # the bridge must not ask the arm to teleport: at 20 Hz and the expert's
-    # 10 mm/step carrot, a 60 mm jump is a command the IK cannot track
+    # 橋渡しでアームに瞬間移動を頼んではいけない。20Hz でエキスパートの
+    # 10mm/ステップの人参に対して、60mm の飛びは IK が追えない指令
     assert steps.max() < 0.06, f"{steps.max() * 1000:.0f} mm"
-    # the gripper must not change state during the bridge
+    # 橋渡しの間、グリッパの状態は変わってはいけない
     assert np.all(grip[:10] == grip[0])
 
 

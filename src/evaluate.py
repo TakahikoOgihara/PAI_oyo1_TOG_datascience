@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 4 -- closed-loop evaluation of the BC policy.
+"""ARM_BCRL006 フェーズ4。BC方策の閉ループ評価。
 
-Compares the robomimic-trained BC policy against random control and the
-scripted IK expert on the same randomised-episode battery, in the SAME MuJoCo
-environment used for demo collection (one simulator subprocess per method, so
-a crash in one baseline cannot corrupt another's numbers). The RL fine-tuning
-phase (src/rl_finetune.py) reuses these reports for the BC-vs-BC+RL
-improvement measurement, and src/ablation.py reuses this whole script's shape
-for its 4x2 grid.
+robomimic で学習した BC 方策を、ランダム制御とスクリプトIKエキスパートと
+同じランダム化エピソード群で比べる。環境はデモ収集に使ったのと同じ
+MuJoCo（手法ごとに1プロセス立てるので、片方が落ちても他方の数値は
+壊れない）。RL微調整のフェーズ（src/rl_finetune.py）は BC と BC+RL の
+改善量を測るのにこの結果を読み直し、src/ablation.py は 4x2 格子のために
+このスクリプトの形をそのまま使う。評価の入口は1つに保ってある。
 
-RANDOM AND THE SCRIPTED EXPERT ARE NOT DECORATION. Random is the floor: a
-success rate that does not clearly beat it means the policy learned nothing.
-The expert is the ceiling: BC cannot exceed its demonstrator, so the gap
-between them is the only honest measure of how much of the demonstration the
-clone actually captured.
+
+ランダムとスクリプトエキスパートは飾りではない。ランダムは下限で、
+それを明確に上回らない成功率は、方策が何も学んでいないという意味。
+エキスパートは上限で、BC は教師役を超えられない。両者の差が、複製が
+デモのどれだけを実際に捉えたかの、唯一正直な尺度になる。だから3つを
+必ず同じ条件で並べて出す。
 """
 
 from __future__ import annotations
@@ -33,11 +33,11 @@ from mlops import plotting
 from mlops.tracking import mlflow_run, wandb_log_eval
 
 SIM = os.path.join(REPO_ROOT, "mujoco_sim", "train_arm_mujoco.py")
-# One simulator process per evaluation, launched with THIS interpreter
-# (sys.executable), so the child inherits the same virtualenv. ARM_BCRL005
-# needed Isaac Sim's own python.sh here and had to document that isaaclab.sh
-# swallows the child's exit code; neither problem exists locally, and
-# check=True now actually stops the pipeline when the simulator fails.
+# 評価1本につきシミュレータを1プロセス。起動にはこのインタプリタ
+# （sys.executable）を使うので、子プロセスも同じ仮想環境を継ぐ。
+# ARM_BCRL005 では Isaac Sim 付属の python.sh が必要で、isaaclab.sh が
+# 子の終了コードを飲むことまで注記する必要があった。ローカルでは
+# どちらも起きず、check=True が実際にパイプラインを止めてくれる。
 def _sim_env() -> dict:
     env = dict(os.environ)
     env.setdefault("MUJOCO_GL", "osmesa")
@@ -98,9 +98,9 @@ def main(cfg: DictConfig) -> None:
                          os.path.join(out, "eval_comparison.png"),
                          title="ARM_BCRL006 BC vs baselines")
 
-    # the closed-loop numbers go to W&B too: a training curve cannot tell a
-    # stakeholder whether the robot does the task, and these are the only
-    # numbers that can (mlops/tracking.py::wandb_log_eval)
+    # 閉ループの数値は W&B にも送る。学習曲線は「ロボットが仕事をするか」を
+    # 関係者に伝えられず、それを伝えられるのはこの数値だけ
+    # （mlops/tracking.py::wandb_log_eval）
     wandb_log_eval(cfg, f"{cfg.experiment_name}_eval_bc", results)
 
     with mlflow_run(cfg, run_name=f"{cfg.experiment_name}_eval"):

@@ -1,41 +1,41 @@
 # -*- coding: utf-8 -*-
-"""Domain randomisation -- the MuJoCo counterpart of ARM_BCRL005's EventCfg.
+"""ドメインランダム化。ARM_BCRL005 の EventCfg に対応する MuJoCo 版。
 
-Isaac Lab expressed DR as ``EventManager`` terms drawn from
-``isaaclab.envs.mdp.events``. MuJoCo has no such manager, so the same axes are
-implemented here as explicit writes into ``MjModel`` / ``MjData``. The axis
-list, the ranges and the on/off defaults are UNCHANGED from
-``configs/env/mycobot_pickplace.yaml``; only the mechanism moved. The
-correspondence is tabulated in change log §3-4.
+Isaac Lab では DR を ``isaaclab.envs.mdp.events`` から取った
+``EventManager`` の項として書いていた。MuJoCo にその管理者はいないので、
+同じ軸を ``MjModel`` / ``MjData`` への明示的な書き込みとしてここに実装
+する。軸の一覧、範囲、ON/OFFの既定値は
+``configs/env/mycobot_pickplace.yaml`` から変えていない。移ったのは
+仕組みだけで、対応は下の表のとおり。
 
-| axis                     | ARM_BCRL005 (Isaac Lab)               | here                        |
+| 軸                       | ARM_BCRL005 (Isaac Lab)               | ここでの実装                |
 |--------------------------|---------------------------------------|-----------------------------|
-| arm joint noise at reset | mdp.reset_joints_by_offset            | qpos write                  |
-| object mass              | mdp.randomize_rigid_body_mass         | model.body_mass + inertia   |
-| object friction          | mdp.randomize_rigid_body_material     | model.geom_friction[:,0]    |
-| object restitution       | ... same term                         | model.geom_solref dampratio |
-| actuator gains           | project term (coupled kp/kv)          | actuator_gainprm/biasprm    |
-| joint friction/armature  | mdp.randomize_joint_parameters        | dof_frictionloss/dof_armature |
-| mid-episode push         | mdp.push_by_setting_velocity (interval) | qvel write on a timer     |
-| light / albedo           | project term (USD) / Replicator       | light_diffuse, geom_rgba    |
+| リセット時の関節ノイズ   | mdp.reset_joints_by_offset            | qpos への書き込み           |
+| ワークの質量             | mdp.randomize_rigid_body_mass         | model.body_mass + inertia   |
+| ワークの摩擦             | mdp.randomize_rigid_body_material     | model.geom_friction[:,0]    |
+| ワークの反発             | ... 同じ項                            | model.geom_solref dampratio |
+| アクチュエータのゲイン   | 自作項（kp/kv を連動）                | actuator_gainprm/biasprm    |
+| 関節摩擦/アーマチュア    | mdp.randomize_joint_parameters        | dof_frictionloss/dof_armature |
+| エピソード途中の外乱     | mdp.push_by_setting_velocity (interval) | タイマで qvel 書き込み    |
+| 照明 / アルベド          | 自作項（USD）/ Replicator             | light_diffuse, geom_rgba    |
 
-TWO PROPERTIES WORTH KEEPING IN MIND, both carried over from ARM_BCRL005:
+覚えておく性質が2つ。どちらも ARM_BCRL005 から引き継いでいる:
 
-1. *Everything here is a property write at reset, not an extra render and not
-   an extra step.* That is why DR is affordable at all; the expensive kinds
-   (per-frame texture/background re-rendering) buy little for one known object
-   on one known bench and would wreck the PDCA cycle time.
-2. *Wide DR is not free.* Widening the distribution without adding data lowers
-   success -- which is precisely what the 4-condition study in ``src/ablation.py``
-   measures instead of asserting. Each range in the YAML is "the honest
-   uncertainty about the real thing", not "as wide as possible".
+1. *ここでの操作はすべてリセット時のプロパティ書き換えで、描画も
+   ステップも増えない。* だから DR が現実的な値段で済む。高い種類の DR
+   （フレームごとのテクスチャや背景の再描画）は、既知の台に既知の物体
+   1つという状況ではほとんど買えず、PDCA の周期を壊す。
+2. *広い DR は無料ではない。* データを増やさずに分布を広げれば成功率は
+   下がる。それを主張ではなく測るのが ``src/ablation.py`` の4条件比較。
+   YAML の各範囲は「実物についての正直な不確かさ」であって、「できるだけ
+   広く」ではない。
 
-ARM_BCRL006 CHANGE: with ``domain_rand.enable=false`` the distractor block is
-placed at a FIXED nominal pose instead of a random one. ARM_BCRL005 kept
-randomising it because its DR switch only governed the physical axes. For the
-ablation to mean anything, "DR off" has to mean no scene perturbation at all;
-the object's own spawn window stays randomised in every condition because that
-is the TASK, not a perturbation.
+ARM_BCRL006 での変更。``domain_rand.enable=false`` のとき、邪魔物の
+ブロックをランダムではなく固定の公称姿勢に置く。ARM_BCRL005 では DR の
+スイッチが物理軸だけを支配していたので、邪魔物は常にランダムだった。
+比較に意味を持たせるには「DR off」がシーンの摂動ゼロでなければならない。
+ワーク自身の出現窓はどの条件でもランダムのまま。それは摂動ではなく
+タスクだから。
 """
 
 from __future__ import annotations
@@ -52,9 +52,9 @@ class DomainRandomizer:
         self.dr = env.cfg.env.domain_rand
         self.enabled = bool(self.dr.enable)
         m = self.model
-        # nominal values captured once: every randomiser writes
-        # nominal * factor, never previous * factor, so repeated resets cannot
-        # random-walk the model away from its configured operating point.
+        # 公称値を一度だけ取っておく。どのランダマイザも「公称 x 係数」を
+        # 書き、「前回 x 係数」にはしない。だからリセットを繰り返しても、
+        # モデルが設定した動作点からランダムウォークで離れることはない。
         self.nom_body_mass = m.body_mass.copy()
         self.nom_body_inertia = m.body_inertia.copy()
         self.nom_geom_friction = m.geom_friction.copy()
@@ -66,12 +66,12 @@ class DomainRandomizer:
         self.nom_armature = m.dof_armature.copy()
         self.nom_light_diffuse = m.light_diffuse.copy()
         self._push_next = np.zeros(env.num_envs)
-        # Set when a reset writes a mass / inertia / armature. Those feed
-        # MuJoCo's COMPILE-TIME derived constants (body_invweight0,
-        # dof_invweight0, dof_M0), which the constraint solver uses to scale
-        # contact impedance -- so writing model.body_mass alone leaves the
-        # solver working from the old numbers and grasps silently stop holding.
-        # env._reset_idx calls mj_setConst() when this is true.
+        # 質量・慣性・アーマチュアを書いたリセットで立てる旗。これらは
+        # MuJoCo のコンパイル時の派生定数（body_invweight0、dof_invweight0、
+        # dof_M0）に入っていて、拘束ソルバが接触のインピーダンスを
+        # 正規化するのに使う。model.body_mass だけ書くとソルバは古い値で
+        # 働き続け、把持が黙って保たなくなる。
+        # これが真のとき env._reset_idx が mj_setConst() を呼ぶ。
         self.needs_setconst = False
 
     # ------------------------------------------------------------------
@@ -81,16 +81,16 @@ class DomainRandomizer:
             return None
         lo, hi = (float(v) for v in rng)
         if unit is not None and lo == unit and hi == unit:
-            return None                     # identity range == term switched off
+            return None                     # 恒等範囲 == その項はOFF
         return lo, hi
 
     def active_terms(self) -> list:
-        """The randomisers that are ACTUALLY live, printed at startup.
+        """実際に生きているランダマイザ。起動時に表示する。
 
-        ARM_BCRL005 needed this because a moved PhysX API could silently no-op
-        a randomiser; here the risk is the opposite (a configured range that is
-        the identity), and either way "what did this run actually randomise"
-        must be answerable from the log alone.
+        ARM_BCRL005 ではこれが必要だった。PhysX の API が動くとランダマイザが
+        黙って無効化され得たから。こちらで怖いのは逆（設定した範囲が恒等に
+        なっていること）だが、どちらにしても「この実行は実際に何を
+        ランダム化したのか」はログだけで答えられないといけない。
         """
         if not self.enabled:
             return []
@@ -118,21 +118,21 @@ class DomainRandomizer:
         return t
 
     def _u(self, lo, hi, n=None):
-        """Perturbation randomness (DR)."""
+        """摂動側の乱数（DR）。"""
         return self.env.rng.uniform(lo, hi, size=n)
 
     def _task(self, lo, hi, n=None):
-        """TASK randomness (where the block is). A separate stream, so the same
-        seed gives the same scenes whether or not DR is on -- see
-        MuJoCoPickPlaceEnv.__init__."""
+        """タスク側の乱数（ワークがどこに出るか）。別系列にしてあるので、
+        同じシードなら DR のON/OFFに関係なく同じシーンになる。
+        MuJoCoPickPlaceEnv.__init__ を参照。"""
         return self.env.task_rng.uniform(lo, hi, size=n)
 
     # ------------------------------------------------------------------
     def on_reset_round(self) -> None:
-        """Randomisers that are global to the model rather than per-env: the
-        light and the desk/block albedo. Re-sampled once per reset round,
-        exactly as ARM_BCRL005's ``randomize_appearance`` was (Isaac Lab's dome
-        light and the USD materials were also global)."""
+        """環境ごとではなくモデル全体にかかるランダマイザ。照明と、机と
+        ブロックのアルベド。リセット1巡につき1回引き直す。ARM_BCRL005 の
+        ``randomize_appearance`` と同じ扱い（Isaac Lab のドーム照明と USD
+        マテリアルもモデル全体のものだった）。"""
         m = self.model
         m.light_diffuse[:] = self.nom_light_diffuse
         m.geom_rgba[:] = self.nom_geom_rgba
@@ -155,14 +155,14 @@ class DomainRandomizer:
 
     # ------------------------------------------------------------------
     def reset_envs(self, env_ids: np.ndarray) -> None:
-        """Per-environment reset: arm pose, object/target, distractor, and the
-        physical axes. Called from ``env._reset_idx`` before ``mj_forward``."""
+        """環境ごとのリセット。アームの姿勢、ワークと目標、邪魔物、そして
+        物理軸。``env._reset_idx`` から ``mj_forward`` の前に呼ばれる。"""
         e = self.cfg.env
         m, d = self.model, self.env.data
         idx = self.env.idx
         n = len(env_ids)
 
-        # -- arm + fingers ------------------------------------------------
+        # -- アームと指 ----------------------------------------------------
         noise = float(self.dr.joint_noise) if self.enabled else 0.0
         q = np.tile(self.env.home_q, (n, 1))
         if noise > 0:
@@ -172,7 +172,7 @@ class DomainRandomizer:
         d.qpos[idx.finger_qadr[env_ids]] = float(e.gripper_open)
         d.qvel[idx.finger_dofadr[env_ids]] = 0.0
 
-        # -- object spawn + place target (the TASK, randomised always) ----
+        # -- ワークの出現と設置目標（タスクなので常にランダム） -----------
         x = self._task(float(e.object.spawn_x[0]), float(e.object.spawn_x[1]), n)
         y = self._task(float(e.object.spawn_y[0]), float(e.object.spawn_y[1]), n)
         z = float(e.object.height) / 2.0
@@ -198,7 +198,7 @@ class DomainRandomizer:
             if self.enabled:
                 dx = self._u(float(self.dr.distractor_x[0]), float(self.dr.distractor_x[1]), n)
                 dy = self._u(float(self.dr.distractor_y[0]), float(self.dr.distractor_y[1]), n)
-                # keep clear of the working lane between the block and the target
+                # ワークと目標の間の通り道を塞がない位置にする
                 too_close = (np.abs(dx - x) < 0.07) & (np.abs(dy - y) < 0.12)
                 dy = np.where(too_close, dy + 0.15 * np.sign(dy + 1e-6), dy)
             else:
@@ -214,7 +214,7 @@ class DomainRandomizer:
             self._restore_physics(env_ids)
             return
 
-        # -- physical axes --------------------------------------------------
+        # -- 物理軸 ---------------------------------------------------------
         bids = idx.obj_bodyid[env_ids]
         rng = self._rng_range("object_mass")
         if rng is not None:
@@ -227,25 +227,25 @@ class DomainRandomizer:
         gids = idx.obj_geomid[env_ids]
         rng = self._rng_range("object_friction")
         if rng is not None:
-            # static == dynamic (MuJoCo has one sliding-friction coefficient),
-            # which is what ARM_BCRL005 configured anyway.
+            # 静摩擦 == 動摩擦（MuJoCo のすべり摩擦係数は1つ）。ARM_BCRL005 でも
+            # 結局そう設定していた。
             m.geom_friction[gids, 0] = self._u(rng[0], rng[1], n)
         rng = self._rng_range("object_restitution", 0.0)
         if rng is not None:
-            # MuJoCo has no restitution coefficient; bounciness lives in the
-            # contact solver reference as the damping ratio solref[1]
-            # (1.0 = critically damped = no bounce). Mapping it here keeps the
-            # YAML describing the PHYSICAL quantity, not a solver parameter.
+            # MuJoCo に反発係数は無い。跳ね返りは接触ソルバの基準の減衰比
+            # solref[1] として表す（1.0 = 臨界減衰 = 跳ねない）。ここで写して
+            # おけば、YAML 側はソルバのパラメータではなく物理量を書いたまま
+            # でいられる。
             r = self._u(rng[0], rng[1], n)
             m.geom_solref[gids, 1] = np.clip(1.0 - 0.9 * r, 0.05, 1.0)
 
         rng = self._rng_range("actuator_gain_scale", 1.0)
         if rng is not None:
-            # stiffness AND damping scaled by the SAME factor. Isaac Lab's own
-            # randomize_actuator_gains samples them independently, which moves
-            # the damping ratio and produces environments that oscillate or
-            # crawl: noise, not robustness. Coupling them keeps the ratio where
-            # it was tuned, which is the entire point of randomising the gains.
+            # 剛性と減衰を同じ係数で動かす。Isaac Lab の
+            # randomize_actuator_gains は独立に引くので、減衰比が動いて、
+            # 振動する環境や這うような環境ができる。それは頑健性ではなく
+            # ノイズ。連動させれば調整した比のまま動き、ゲインを
+            # ランダム化する意味が保たれる。
             s = self._u(rng[0], rng[1], n)[:, None]
             aids = idx.arm_actid[env_ids]
             m.actuator_gainprm[aids, 0] = self.nom_gainprm[aids, 0] * s
@@ -269,11 +269,11 @@ class DomainRandomizer:
             self._push_next[env_ids] = self._u(2.0, 6.0, n)
 
     def _restore_physics(self, env_ids: np.ndarray) -> None:
-        """DR off: put every randomisable property back to its nominal value.
+        """DR off のとき、ランダム化対象のプロパティを全部公称値へ戻す。
 
-        Necessary because ``domain_rand.enable`` can differ between the run
-        that collected the data and the run that evaluates the policy -- which
-        is exactly what the 4-condition ablation does.
+        必要なのは、データを集めた実行と方策を評価する実行とで
+        ``domain_rand.enable`` が違い得るから。4条件比較はまさにそれを
+        やっている。
         """
         m = self.model
         idx = self.env.idx
@@ -294,10 +294,10 @@ class DomainRandomizer:
 
     # ------------------------------------------------------------------
     def interval_push(self, dt: float) -> None:
-        """Mid-episode disturbance -- the axis a reset-only randomiser cannot
-        express at all. Ships OFF: the scripted expert has to keep succeeding
-        through any DR that is on, because its success rate is the ceiling on
-        data quality. Useful for an RL-only robustness ablation."""
+        """エピソード途中の外乱。リセット時だけのランダマイザでは表現でき
+        ない軸。既定はOFF。ONにした DR の中でもスクリプトエキスパートは
+        成功し続けないといけない（その成功率がデータ品質の上限）から。
+        RL専用の頑健性比較には役立つ。"""
         if not self.enabled:
             return
         pv = self._rng_range("object_push_vel", 0.0)

@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Record the submission video: one MP4 that explains the project in 2 minutes.
+"""提出動画を録る。プロジェクトを2分で説明する MP4 を1本作る。
 
-Narrated in Japanese, because the assignment is submitted in Japanese and a
-caption the reviewer has to translate is a caption that does not get read.
+説明は日本語。課題の提出が日本語で、査読者が訳さないと読めない字幕は
+読まれない字幕だから。
 
-The assignment grades "表現力: how clearly the video is composed and
-explained", and a clip of an arm moving does not by itself say what is driving
-it or whether it worked. This script produces a narrated sequence instead:
+課題は「表現力: 動画の構成と説明の分かりやすさ」を採点する。アームが
+動くだけの映像では、何がそれを動かしているのか、うまくいったのかが
+伝わらない。そこで、説明付きの流れとして作る:
 
-    0a タイトル／概要    what the task is, and why this project is not just a
-                         pipeline that runs -- the two claims it tests
-    0b パイプライン      the 11 phases, and the question the study answers
-    1  スクリプトIK      where the DATA comes from
-    2  BC                what cloning that data gets you
-    3  PPO               the teacher
-    4  ACT 視覚運動      the deployed artifact -- wrist camera only, no object
-                         pose: the same inputs the real robot has
-    5  結果カード        the 4x2 ablation grid and the release gate
+    0a タイトル／概要    タスクは何か、そしてこれが単に動くパイプラインで
+                         はない理由。検証した2つの主張
+    0b パイプライン      11フェーズと、比較実験が答えを出した問い
+    1  スクリプトIK      データの出どころ
+    2  BC                そのデータを複製すると何が手に入るか
+    3  PPO               教師
+    4  ACT 視覚運動      配備する成果物。手首カメラだけで、ワークの姿勢は
+                         使わない。実機と同じ入力
+    5  結果カード        4x2 の比較格子とリリースゲート
 
-Every clip carries the wrist-camera view inset, the policy name, the episode
-counter and the running success rate, so the viewer can check the claim against
-what is on screen rather than taking it on trust.
+どのクリップにも手首カメラの小窓、方策名、エピソード数、途中までの
+成功率を重ねる。主張を鵜呑みにせず、画面と突き合わせて確認できるように
+するため。
 
     python src/record_video.py                      # -> artifacts/video/pickplace_demo.mp4
     python src/record_video.py video.seconds_per_policy=20
@@ -48,13 +48,13 @@ W, H = 960, 540
 
 
 def _card(lines: list, seconds: float, fps: int) -> list:
-    """A full-frame text card, repeated for ``seconds``.
+    """全画面のテキストカードを1枚作り、``seconds`` 秒ぶん繰り返す。
 
-    A line is ``(text, colour, gap)`` or ``(text, colour, gap, size)``, where
-    ``text`` is either a string (drawn at the left margin, wrapped to the frame)
-    or a list of ``(string, x)`` segments. The segment form exists because the
-    default font is PROPORTIONAL: padding a table with f-string widths lines the
-    columns up in a terminal and visibly fails to line them up on screen.
+    1行は ``(text, colour, gap)`` か ``(text, colour, gap, size)``。``text`` は
+    文字列（左余白から描き、フレーム幅で折り返す）か、``(string, x)`` の
+    並びのリスト。並びの形が必要なのは、既定のフォントがプロポーショナル
+    だから。f文字列の桁揃えで表を作ると、端末では揃って見えるのに画面上
+    では明らかに揃わない。
     """
     from PIL import Image, ImageDraw
     from mujoco_sim.viewer import wrap
@@ -72,10 +72,10 @@ def _card(lines: list, seconds: float, fps: int) -> list:
                 d.text((64, y), row, fill=colour, font=f)
                 y += gap
     if y > H + BAR_H:
-        # Not cosmetic: text drawn past the bottom edge is simply not in the
-        # video, and a results card is where the evidence lives. The English
-        # card this replaced ran to y=1022 in a 660 px frame -- the release
-        # gate was never on screen.
+        # 見た目の問題ではない。下端より外に描いた文字は動画に入らないし、
+        # 結果カードは証拠が載る場所。これを置き換える前の英語カードは
+        # 660px のフレームに対して y=1022 まで伸びていて、リリースゲートが
+        # 一度も画面に映っていなかった。
         print(f"[video] WARNING: a text card overflows the frame "
               f"(needs {y} px of {H + BAR_H}); shorten it or split it in two.")
     frame = np.asarray(img)
@@ -111,10 +111,10 @@ def _segment(env, act_fn, reset_hook, label, claim, steps, fps, renderer, mujoco
 
 
 def _policies(env, cfg):
-    """(label, claim, act_fn, reset_hook) for every stage that actually exists.
+    """実際に存在する段ごとの (label, claim, act_fn, reset_hook)。
 
-    A stage with no artifact is SKIPPED rather than faked: the video must show
-    what this repository produced, not what it would produce.
+    成果物が無い段は、でっち上げずにスキップする。動画が映すのはこの
+    リポジトリが実際に作ったもので、作れるはずのものではない。
     """
     out = []
     expert = ExpertController(env)
@@ -146,9 +146,9 @@ def _policies(env, cfg):
     return out
 
 
-# The ablation JSON stores English labels (they are written by src/ablation.py
-# and are also read by the write-up). The video is Japanese, so translate on the
-# way to the screen rather than rewriting artifacts that are already measured.
+# 比較実験のJSONは英語のラベルで保存されている（書くのは
+# src/ablation.py で、文章側もそれを読む）。動画は日本語なので、
+# 測り終わった成果物を書き換えるのではなく、画面に出す時に訳す。
 _COND_JA = {
     "baseline": "A: 何もなし",
     "mimicgen": "B: MimicGen のみ",
@@ -160,13 +160,13 @@ _COND_JA = {
 
 
 def _results_lines() -> list:
-    """-> a LIST OF CARDS, each a list of lines, read back out of the artifacts.
+    """-> カードのリスト。各カードは行のリストで、中身は成果物から読み直す。
 
-    Nothing here is typed in by hand: if a number moves, the card moves with it.
+    手で打ち込んだ数字は1つも無い。数字が動けばカードも動く。
 
-    Two cards rather than one because it does not fit in one. The ablation
-    grid, the data-matched control, the end-to-end ladder and the release gate
-    together need roughly 1000 px of a 660 px frame.
+    1枚に収まらないので2枚に分けている。比較格子、データ量を揃えた対照、
+    一気通貫の階段、リリースゲートを合わせると、660pxのフレームに対して
+    1000px ほど必要になる。
     """
     C1, C2, C3 = 64, 470, 700          # 条件 / 公称ベンチ / 乱択ベンチ の3列
     C2_LADDER = 560                    # 一気通貫の表は行名が長いので値を右へ
@@ -205,8 +205,8 @@ def _results_lines() -> list:
     if os.path.exists(dep):
         with open(dep, encoding="utf-8") as f:
             rep = json.load(f)
-        # The end-to-end ladder. Without it the gate verdict below reads as
-        # "the project failed" instead of "the gate did its job, and we know why".
+        # 一気通貫の階段。これが無いとゲートの判定が「失敗した」に読めるが、
+        # 正しくは「ゲートが仕事をし、理由も分かっている」である。
         rungs = [("スクリプトエキスパート（特権情報）", "expert"), ("BC（行動クローン）", "bc"),
                  ("PPO 微調整 = 教師", "rl"),
                  ("ACT 視覚運動 = 配備物", "act")]
@@ -214,7 +214,7 @@ def _results_lines() -> list:
                 if isinstance(rep.get(k), dict) and "deployed_metrics" in rep[k]]
         exp = os.path.join(REPO_ROOT, "artifacts", "eval",
                            "eval_report_scripted_expert.json")
-        if os.path.exists(exp):                      # the ceiling BC is measured against
+        if os.path.exists(exp):                      # BC を測るときの上限
             with open(exp, encoding="utf-8") as f:
                 rows.insert(0, ("スクリプトIKエキスパート（特権）= 上限", json.load(f)))
         if rows:
@@ -261,9 +261,9 @@ def main(cfg: DictConfig) -> None:
     renderer = mujoco.Renderer(env.model, H, W)
     stages = _policies(env, cfg)
 
-    # Card 0a -- what the task is and what is unusual about how it is solved.
-    # The reviewer decides in the first ten seconds whether this is "a pipeline
-    # that runs" or "a study"; that has to be on screen before the arm moves.
+    # カード0a。タスクの中身と、解き方のどこが変わっているか。
+    # 査読者は最初の10秒で「ただ動くパイプライン」か「実験」かを決める。
+    # だからアームが動く前に、それを画面に出しておく必要がある。
     frames = _card([
         ("ARM_BCRL006 ── 6軸アームに「掴んで運ぶ」を学習させる", FG, 50, 28),
         ("myCobot 280 Pi（6自由度）｜ MuJoCo ｜ ノートPC 1台・GPUサーバー不要",
@@ -282,7 +282,7 @@ def main(cfg: DictConfig) -> None:
         ("　　　⇒ 模倣学習（蒸留）で実機でも動く入力で学習）", DIM, 32, 22),
     ], 9.0, fps)
 
-    # Card 0b -- the pipeline, and the question the 2x2 study answers.
+    # カード0b。パイプラインと、2x2 の実験が答える問い。
     frames += _card([
         ("パイプラインと、この実験が答えを出した問い", FG, 50, 30),
         ("全11フェーズ・1コマンドで再現できる", DIM, 46, 22),

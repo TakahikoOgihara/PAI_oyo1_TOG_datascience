@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""The environment contract every downstream artifact is defined on.
+"""下流の全成果物が定義の土台にしている、環境の契約。
 
-The 31-dim observation layout, the 7-dim action encoding and the success test
-are indexed into by the ONNX graphs, the Jetson runtime, mimicgen/annotate.py
-and arm_policy/dataset.py. A change here that nothing catches silently
-corrupts every dataset and every deployed model -- which is exactly the class
-of failure this project was rebuilt to stop.
+31次元の観測の並び、7次元の行動の符号化、成功判定は、ONNX のグラフ、
+Jetson のランタイム、mimicgen/annotate.py、arm_policy/dataset.py が
+位置で参照している。ここが変わって誰も捕まえないと、全データセットと
+配備済みの全モデルが黙って壊れる。このプロジェクトを作り直して止めよう
+としたのは、まさにその種類の失敗。
 """
 
 import numpy as np
@@ -22,10 +22,10 @@ def test_observation_layout_is_frozen(env):
     assert torch.allclose(obs[:, OBS_EEF_POS], env.eef_pos_env(), atol=1e-6)
     assert torch.allclose(obs[:, OBS_OBJ_POS], env.obj_pos_env(), atol=1e-6)
     assert torch.allclose(obs[:, OBS_PLACE_TARGET], env.place_target, atol=1e-6)
-    # obj - eef, then the previous action
+    # obj - eef、そのあとに直前の行動
     assert torch.allclose(obs[:, 18:21], env.obj_pos_env() - env.eef_pos_env(), atol=1e-6)
     assert torch.allclose(obs[:, 24:31], env.actions, atol=1e-6)
-    # eef_quat is wxyz and unit-norm; the tool points DOWN at the ready pose
+    # eef_quat は wxyz で単位ノルム。ready 姿勢ではツールは下を向く
     q = obs[:, OBS_EEF_QUAT]
     assert torch.allclose(q.norm(dim=-1), torch.ones(env.num_envs), atol=1e-5)
 
@@ -38,8 +38,8 @@ def test_place_target_is_the_configured_offset(env, cfg):
 
 
 def test_action_is_clamped_and_rate_limited(env):
-    """The Raspberry Pi integrates exactly this contract, so the simulator has
-    to honour it: |action| <= 1, and the commanded joint step is bounded."""
+    """Raspberry Pi はまさにこの契約を積分するので、シミュレータも守らない
+    といけない。|action| <= 1 で、指令する関節ステップは有界。"""
     env.reset()
     q0 = env.arm_q().clone()
     env.step(torch.full((env.num_envs, ACT_DIM), 100.0))
@@ -49,12 +49,12 @@ def test_action_is_clamped_and_rate_limited(env):
 
 
 def test_virtual_floor_is_enforced_in_the_simulator(env):
-    """Drive the arm straight down for a full episode; the tool must not end up
-    below the plane the Pi's guard enforces. Without this the policy would be
-    trained against a limit it never meets and would fight it on hardware."""
+    """1エピソードまるごとアームを真下へ駆動する。ツールは、Pi のガードが
+    強制する平面より下で終わってはならない。これが無いと、方策は一度も
+    出会わない制限に対して学習し、実機でそれと戦うことになる。"""
     env.reset()
     a = torch.zeros(env.num_envs, ACT_DIM)
-    a[:, 1] = -1.0          # shoulder down, hard
+    a[:, 1] = -1.0          # 肩を下げる。強く
     a[:, 6] = -1.0
     worst = 1.0
     for _ in range(120):
@@ -64,12 +64,12 @@ def test_virtual_floor_is_enforced_in_the_simulator(env):
 
 
 def test_success_requires_lift_place_release_and_rest(env, cfg):
-    """All five conditions, because dropping any one of them turns a different
-    behaviour into 'success': hovering, shoving, or still holding the block."""
+    """5つの条件を全部見る。どれか1つを落とすと、別の振る舞いが「成功」に
+    なってしまう。浮かせ続ける、押しのける、まだ握っている。"""
     env.reset()
     env.was_lifted[:] = True
     env.actions[:, 6] = 1.0                      # released
-    # move the block onto the target and let it settle
+    # ブロックを目標へ運び、静止させる
     idx = env.idx
     for i in range(env.num_envs):
         a = idx.obj_qadr[i]
@@ -78,17 +78,17 @@ def test_success_requires_lift_place_release_and_rest(env, cfg):
         env.data.qvel[idx.obj_dofadr[i]:idx.obj_dofadr[i] + 6] = 0.0
     env.mujoco.mj_forward(env.model, env.data)
     assert bool(env.is_success().all())
-    env.actions[:, 6] = -1.0                     # still gripping -> not success
+    env.actions[:, 6] = -1.0                     # まだ握っている -> 成功ではない
     assert not bool(env.is_success().any())
     env.actions[:, 6] = 1.0
-    env.was_lifted[:] = False                    # never picked it up -> not success
+    env.was_lifted[:] = False                    # 持ち上げていない -> 成功ではない
     assert not bool(env.is_success().any())
 
 
 def test_domain_randomisation_off_restores_nominal_physics(cfg):
-    """DR must be a switch, not a ratchet. src/ablation.py trains with DR on
-    and evaluates with it off in the same codebase, so a randomiser that does
-    not restore its nominal value would silently contaminate the control cell.
+    """DR はスイッチであって、戻らない爪ではない。src/ablation.py は同じ
+    コードで DR ありの学習と DR なしの評価をするので、公称値に戻さない
+    ランダマイザは、対照のセルを黙って汚染する。
     """
     from mujoco_sim.env import MuJoCoPickPlaceEnv
     from omegaconf import OmegaConf
@@ -107,10 +107,10 @@ def test_domain_randomisation_off_restores_nominal_physics(cfg):
 
 
 def test_scripted_expert_clears_the_data_quality_floor(cfg):
-    """The expert's success rate is the CEILING on what BC can learn, so the
-    pipeline refuses to continue below mimicgen.min_source_success. Check it
-    here too, on both test benches, because it is the assumption everything
-    downstream rests on."""
+    """エキスパートの成功率が、BC が学べる上限。だからパイプラインは
+    mimicgen.min_source_success を下回ると続行を拒否する。ここでも、
+    両方の試験ベンチで確認する。下流の全部がその前提に乗っている
+    から。"""
     from mujoco_sim.env import MuJoCoPickPlaceEnv
     from mujoco_sim.policies import ExpertController
     from omegaconf import OmegaConf

@@ -1,51 +1,50 @@
-# Deployed visuomotor policy: ACT (Action Chunking with Transformers, Zhao et
-# al. RSS 2023) by default; Diffusion Policy with visuomotor.type=diffusion.
-# Both implementations are ARM_BCRL005's, unchanged (arm_policy/).
+# 配備する視覚運動方策。既定は ACT（Action Chunking with Transformers、
+# Zhao et al. RSS 2023）。visuomotor.type=diffusion なら Diffusion Policy。
+# 実装はどちらも ARM_BCRL005 のものを変更せず使っている（arm_policy/）。
 type: act
 source: rl_teacher         # rl_teacher | expert
 distill:
-  # ARM_BCRL005 collected ~512 teacher rollouts. Here the wrist camera renders
-  # at ~50 frames/s regardless of backend or process count on the reference
-  # machine, so 512 demos would be ~25 min of pure rendering. 8 envs x 24
-  # batches x 6 workers ~ 1150 demos' worth of ATTEMPTS is not the constraint;
-  # frames are. 192 successful demos (~21k frames) trains ACT to the release
-  # gate and costs ~7 min. Raise it if you have the budget -- distillation
-  # volume is the second-strongest lever on the final number (src/infer.py).
+  # ARM_BCRL005 は教師のロールアウトを約512本集めていた。ここでは手首カメラ
+  # の描画が、基準機ではバックエンドもプロセス数も関係なく毎秒約50フレーム
+  # で、512本なら描画だけで約25分かかる。8環境 x 24バッチ x 6ワーカー ~
+  # 1150本ぶんの試行は制約ではなく、制約はフレーム数の方。成功デモ192本
+  # （約21,000フレーム）で ACT はリリースゲートを通り、約7分で済む。
+  # 予算があれば増やすとよい。蒸留データの量は、最終の数値に対して2番目に
+  # 強いレバー（src/infer.py）。
   num_envs: 8
-  episodes: 4              # per-env batches per worker
-  workers: 0               # 0 = auto, same sharding as collect
-  min_success: true        # keep successful episodes only
-image_size: 224            # must match env.camera width/height
-qpos_dim: 7                # 6 arm joints + previous gripper command
-chunk: 20                  # predicted action chunk length (1 s at 20 Hz)
-execute_horizon: 10        # receding horizon: execute this many, then re-infer
+  episodes: 4              # ワーカーごと、環境ごとのバッチ数
+  workers: 0               # 0 = 自動。collect と同じ分割
+  min_success: true        # 成功したエピソードだけ残す
+image_size: 224            # env.camera の width/height と一致させること
+qpos_dim: 7                # アーム6関節 + 直前のグリッパ指令
+chunk: 20                  # 予測する行動チャンクの長さ（20Hzで1秒）
+execute_horizon: 10        # 後退ホライズン。この本数だけ実行して再推論する
 train:
   batch_size: 64
   epochs: 60
-  require_pretrained_backbone: true   # a randomly-initialised ResNet18 cannot
-                                      # be trained on a few hundred wrist-cam
-                                      # trajectories, and silently shipping one
-                                      # is how ARM_BCRL002 deployed a policy
-                                      # that could not see. false = deliberate
-                                      # no-pretraining ablation only.
+  require_pretrained_backbone: true   # ランダム初期化の ResNet18 は、数百本の手首
+                                      # カメラ軌跡では学習できない。それを黙って
+                                      # 出荷したのが、ARM_BCRL002 が見えない方策を
+                                      # 配備した経緯。false は意図的な「事前学習
+                                      # なし」の比較用だけで、通常は触らない。
+                                      # 既定は true。
   lr: 0.0001
   weight_decay: 0.0001
   val_split: 0.1
   num_workers: 4
   aug:
-    # Light domain randomisation at TRAINING time -- the standard low-cost way
-    # to cover hue/exposure/viewpoint drift with zero extra rendering. The
-    # physical axes are randomised in the simulator instead
-    # (configs/env/mycobot_pickplace.yaml domain_rand).
+    # 学習時の軽いドメインランダム化。描画を増やさずに色味・露出・視点の
+    # ずれを覆う、低コストで標準的な方法。物理側の軸はシミュレータで
+    # ランダム化する（configs/env/mycobot_pickplace.yaml の domain_rand）。
     enable: true
     brightness: 0.25
     contrast: 0.25
     saturation: 0.25
     hue: 0.05
     shift_px: 10
-    rotate_deg: 5.0        # +- deg of random image ROLL: the wrist camera is
-                           # bolted to a flange by hand, and roll is precisely
-                           # what a single camera cannot recover from
+    rotate_deg: 5.0        # 画像のロールを±この角度で振る。手首カメラは
+                           # 手でフランジに留めるもので、ロールこそ単眼では
+                           # 復元できない量
 act:
   dim_model: 256
   n_heads: 8
@@ -58,5 +57,5 @@ act:
 diffusion:
   obs_embed_dim: 256
   down_dims: [256, 512]
-  diffusion_steps: 100     # training noise schedule length
-  ddim_steps: 8            # inference denoising steps (edge budget)
+  diffusion_steps: 100     # 学習時のノイズスケジュール長
+  ddim_steps: 8            # 推論時のデノイズ回数（エッジの予算）

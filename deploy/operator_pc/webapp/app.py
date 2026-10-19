@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 operator web app -- runs LOCALLY on the operator PC.
+"""ARM_BCRL006 の操作用 Web アプリ。操作用PCのローカルで走る。
 
-Browser (http://localhost:8000)  <-ws->  this app  <-ws->  Jetson runtime
-                                                          (policy_runtime.py :8765)
+ブラウザ（http://localhost:8000）<-ws-> このアプリ <-ws-> Jetson の
+                                                          ランタイム（policy_runtime.py :8765）
 
-The app is a thin relay: it serves the single-page UI and pipes the browser's
-WebSocket to the Jetson's telemetry/command endpoint, so the browser shows
-the live wrist camera + joint state and the buttons (Start / Pause / Jog /
-Gripper / Home / E-STOP) reach the runtime. Keeping the relay on the
-operator PC means the browser needs no direct route to the robot LAN.
+このアプリは薄い中継。1枚もののUIを配り、ブラウザの WebSocket を
+Jetson のテレメトリ／指令の口へ繋ぐ。だからブラウザに手首カメラと
+関節状態が出て、ボタン（Start / Pause / Jog / Gripper / Home /
+E-STOP）がランタイムに届く。中継を操作用PCに置いているので、
+ブラウザからロボットのLANへの直接の経路は要らない。
 
 Run:
   pip install -r requirements.txt
   JETSON_WS=ws://192.168.10.2:8765 uvicorn app:app --port 8000
-  # then open http://localhost:8000
+  # そのあと http://localhost:8000 を開く
 """
 
 from __future__ import annotations

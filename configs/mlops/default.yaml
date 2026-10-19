@@ -1,27 +1,27 @@
-# Experiment tracking. All three tools are on by default and all three are
-# LOCAL -- no account, no API key, no network. That combination is what makes
-# them usable in a client engagement where the data cannot leave the machine.
+# 実験管理。3つとも既定でONで、3つともローカル完結。アカウントもAPIキーも
+# ネットワークも要らない。その組み合わせが、データを機外に出せない案件で
+# 使える条件になる。
 #
-#   MLflow      the RUN LEDGER: params, metrics, artifacts, and the Model
-#               Registry that decides which ONNX is "champion". This is the
-#               system of record -- src/infer.py reads it to pick what ships.
-#   W&B         the LIVE VIEW: training curves you watch while a run is in
-#               flight, and (ARM_BCRL006) the closed-loop evaluation of every
-#               policy INCLUDING inference, logged as a table + bar chart so
-#               one project page answers "did it get better".
-#   TensorBoard the DEBUG VIEW: the per-iteration PPO scalars
-#               stable-baselines3 writes natively (value loss, entropy,
-#               explained variance, KL). When RL collapses, this is the only
-#               one of the three with the resolution to say why.
+#   MLflow      実行の台帳。パラメータ、指標、成果物、そしてどの ONNX が
+#               「優勝」かを決めるモデルレジストリ。これが記録の正本で、
+#               src/infer.py は何を出荷するかをここから読む。
+#   W&B         生の眺め。走っている最中に見る学習曲線と、
+#               （ARM_BCRL006 では）推論を含む全方策の閉ループ評価を、
+#               表と棒グラフで残す。1つのページで「良くなったのか」に
+#               答えられるようにするため。
+#   TensorBoard デバッグ用。stable-baselines3 が自分で書く反復ごとの
+#               PPO スカラー（価値損失、エントロピー、説明分散、KL）。
+#               RL が崩れたときに理由を言える解像度を持つのは、3つの
+#               中でこれだけ。
 mlflow:
   tracking_uri: sqlite:///${oc.env:PWD}/artifacts/mlflow.db
   experiment_name: arm_bcrl006_pickplace
 wandb:
   enabled: true
-  mode: offline          # offline | online | disabled.
-                         # offline writes a real W&B run to artifacts/wandb
-                         # with no account; `wandb sync` uploads it later, and
-                         # mode=online after `wandb login` streams it live.
+  mode: offline          # offline | online | disabled。
+                         # offline はアカウント無しで artifacts/wandb に本物の
+                         # run を書く。後から `wandb sync` で上げられるし、
+                         # `wandb login` 後に mode=online にすれば生で流れる。
   project: arm_bcrl006_pickplace
   dir: ${oc.env:PWD}/artifacts/wandb
 tensorboard:

@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 1 -- scripted-expert demonstration collection.
+"""ARM_BCRL006 フェーズ1。スクリプトエキスパートによるデモ収集。
 
-No teleop rig, no manual demos: the demonstrations come from the IK state
-machine inside mujoco_sim/ (the automated demo-generation pattern MimicGen
-industrialises), with DART-style noise, a novice-operator mix and failure
-filtering. Wrist-camera frames are recorded alongside, because phase 2's
-image-quality gate and phase 8's visuomotor fallback both need them.
+遠隔操作の装置も手作業のデモも使わない。デモは mujoco_sim/ の中のIK状態
+機械が作る（MimicGen が産業化した自動デモ生成のやり方）。DART流のノイズ、
+初心者オペレータの混入、失敗の除去付き。手首カメラの画像も一緒に記録
+する。フェーズ2の画質ゲートとフェーズ8の視覚運動方策が、どちらもそれを
+必要とするから。
 
-ARM_BCRL006 change vs ARM_BCRL005: the run is SHARDED across processes. Demo
-collection is render-bound, not physics-bound, and rendering is embarrassingly
-parallel -- see src/_shard.py for the measurement that motivates it.
+ARM_BCRL005 からの変更点。実行をプロセス分割した。デモ収集は物理ではなく
+描画が律速で、描画は素直に並列化できる。その実測と分割の詳細は
+src/_shard.py にある。
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ def main(cfg: DictConfig) -> None:
     set_seed(int(cfg.seed))
 
     workers = auto_workers(int(cfg.collect.get("workers", 0)))
-    # the per-shard env count is the configured count divided among workers, so
-    # `collect.num_envs` keeps meaning "how many environments in total"
+    # シャードごとの環境数は、設定値をワーカーで割った数。これで
+    # `collect.num_envs` の意味が「合計で何環境か」のままになる
     per = max(1, int(cfg.collect.num_envs) // workers)
     extra = ["--num_envs", str(per), "--seed", str(int(cfg.seed)),
              "--set", f"collect.episodes={cfg.collect.episodes}",
@@ -59,9 +59,9 @@ def main(cfg: DictConfig) -> None:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     print("[collect]", json.dumps(summary, indent=2))
 
-    # The expert's own success rate is the CEILING on data quality: a policy
-    # cloned from demonstrations cannot be better than the demonstrations. Stop
-    # here rather than spending the rest of the pipeline on a bad dataset.
+    # エキスパート自身の成功率が、データ品質の上限になる。デモから複製した
+    # 方策がデモより上手くなることはない。悪いデータセットに残りの
+    # パイプラインを費やす前に、ここで止める。
     floor = float(cfg.mimicgen.get("min_source_success", 0.7))
     if summary.get("source_success_rate", 1.0) < floor:
         raise SystemExit(

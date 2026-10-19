@@ -1,27 +1,27 @@
 #!/bin/bash
 # =====================================================================
-# THE STUDY: 2x2 over {MimicGen off/on} x {domain randomisation off/on},
-# each trained policy evaluated on BOTH a nominal and a randomised test
-# bench. See src/ablation.py's docstring for why both test benches are
-# required, and design notes §5 for the experimental design.
+# 比較実験: {MimicGen off/on} x {ドメインランダム化 off/on} の 2x2。
+# 学習した各方策を、公称ベンチとランダム化ベンチの両方で評価する。
+# 両方で測る理由と実験設計の意図は src/ablation.py の docstring に
+# まとめてある。
 #
-# Runs the same phase scripts run_all.sh runs, with Hydra overrides --
-# nothing about the pipeline is duplicated, so the reported numbers come
-# from the code that ships.
+# 実行するのは run_all.sh と同じフェーズスクリプトで、変えるのは Hydra の
+# 上書きだけ。パイプラインを複製していないので、出てくる数値は出荷して
+# いるコードが出した数値そのもの。
 #
-#   bash run_ablation.sh                        # 4 conditions x 3 seeds (~80 min)
-#   bash run_ablation.sh ablation.seeds=[0]     # 1 seed (~27 min)
+#   bash run_ablation.sh                        # 4条件 x 3シード（約80分）
+#   bash run_ablation.sh ablation.seeds=[0]     # 1シード（約27分）
 #   bash run_ablation.sh ablation.match_data=true
-#                                               # equalise dataset SIZE across
-#                                               # conditions, isolating MimicGen's
-#                                               # diversity from its volume
+#                                               # 条件間でデータセットの件数を
+#                                               # 揃え、MimicGen の多様性と
+#                                               # 量を切り分ける
 #
-# Outputs -> artifacts/ablation/
-#   ablation.md            the table that goes into the report
-#   ablation.png           grouped bar chart, mean +- std over seeds
-#   ablation_results.json  every cell, every metric, every seed
-#   <condition>_s<seed>/   per-cell evidence (dataset summaries + the ONNX)
-# and one MLflow run + one W&B evaluation page.
+# 出力先 -> artifacts/ablation/
+#   ablation.md            レポートに載せる表
+#   ablation.png           シード間の平均±標準偏差の棒グラフ
+#   ablation_results.json  全セル・全指標・全シードの生データ
+#   <condition>_s<seed>/   セルごとの証跡（データセット要約と ONNX）
+# さらに MLflow の run 1件と W&B の評価ページ1件。
 # =====================================================================
 set -euo pipefail
 cd "$(dirname "$0")"

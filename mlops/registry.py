@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Model registry = the real MLflow Model Registry (local file store).
+"""モデルレジストリは本物の MLflow Model Registry（ローカルのファイル保存）。
 
-RL002 hand-rolled a ``ModelRegistry`` class (``registry.json`` + copied
-checkpoint files) and called it "mirrors MLflow Model Registry". RL003 calls
-the actual MLflow Model Registry API: ``mlflow.onnx.log_model(...,
-registered_model_name=...)`` creates a new version automatically, and a
-``MlflowClient`` alias (``champion``) always points at the best one -- this
-is exactly how a consultant would wire model promotion for a client that
-already runs MLflow.
+RL002 は ``ModelRegistry`` クラスを自作して（``registry.json`` と
+チェックポイントの複製）、「MLflow Model Registry を模した」と言っていた。
+RL003 は実物のAPIを呼ぶ。``mlflow.onnx.log_model(...,
+registered_model_name=...)`` が自動で新しい版を作り、``MlflowClient``
+の別名（``champion``）が常に最良の版を指す。既に MLflow を回している客に
+対してモデルの昇格を配線するなら、普通はこうする、という形に
+そろえてある。
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from mlflow import MlflowClient
 
 
 def register_onnx_model(onnx_path: str, name: str, metrics: dict) -> "mlflow.entities.model_registry.ModelVersion":
-    """Log the ONNX file to the current MLflow run and register it as a new
-    version of ``name`` in the Model Registry."""
+    """ONNX ファイルを現在の MLflow の run に記録し、Model Registry の
+    ``name`` の新しい版として登録する。"""
     model = onnx.load(onnx_path)
     mlflow.log_metrics(metrics)
     info = mlflow.onnx.log_model(model, name="policy", registered_model_name=name)
@@ -29,9 +29,9 @@ def register_onnx_model(onnx_path: str, name: str, metrics: dict) -> "mlflow.ent
 
 def promote_if_best(name: str, version: str, metric_key: str, metrics: dict, mode: str = "max",
                     alias: str = "champion") -> bool:
-    """Compare ``metrics[metric_key]`` for ``version`` against whatever the
-    current ``alias`` points at, and move the alias if this run is better.
-    Returns True if this version became (or stayed) the champion.
+    """``metrics[metric_key]`` を、いま ``alias`` が指しているものと
+    ``version`` で比べ、今回の方が良ければ別名を動かす。
+    この版が優勝になった（またはそのままだった）なら True を返す。
     """
     client = MlflowClient()
     candidate = metrics[metric_key]

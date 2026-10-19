@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 2 -- preprocessing, dataset analysis & robomimic HDF5.
+"""ARM_BCRL006 フェーズ2。前処理、データセット分析、robomimic HDF5 化。
 
-Same hygiene as ARM_BCRL001: per-row outlier clipping on the flat channels
-(global z-score), the SAME row mask applied to every modality (flat / rgb /
-actions stay timestep-aligned), analysis artifacts, then conversion to the
-robomimic HDF5 schema (bc_hdf5/to_robomimic_hdf5.py).
+衛生面は ARM_BCRL001 と同じ。平坦チャンネルの行ごとの外れ値クリップ
+（全体のzスコア）、同じ行マスクを全モダリティに適用（flat / rgb /
+actions の時刻を揃える）、分析用の成果物、そして robomimic の HDF5
+スキーマへの変換（bc_hdf5/to_robomimic_hdf5.py）。
 """
 
 from __future__ import annotations
@@ -30,21 +30,21 @@ FLAT_DIM = 31
 
 
 def image_quality_report(rgb_list, cfg_iq, max_frames: int = 2000) -> dict:
-    """Measure whether the wrist-camera frames actually CONTAIN the task.
+    """手首カメラの画像に、本当にタスクが写っているかを測る。
 
-    ARM_BCRL002 relied on a human glancing at camera_samples.png. The frames
-    that passed that review are almost uniformly white -- an 0.78-albedo bench under a bright light saturates the sensor -- so the deployed
-    visuomotor policy was trained on images with next to no information about
-    where the block is. It then behaved, on the real robot, exactly like a
-    policy that cannot see: it ran the average descend-and-close motion and
-    drove into the desk (field-failure notes §2, cause B).
+    ARM_BCRL002 は camera_samples.png を人が一瞥する運用に頼っていた。その
+    確認を通った画像はほぼ一様に白い。反射率0.78の台を明るい照明で照らすとセンサが飽和する。結果として配備した
+    視覚運動方策は、ワークの位置の情報がほとんど無い画像で学習されていた。
+    そして実機では、見えていない方策がするとおりに振る舞った。平均的な
+    「降りて閉じる」動作をなぞって、机に突っ込んだ（実機の失敗記録に
+    原因として残してある）。
 
-    Four cheap statistics turn that review into a gate:
-      mean_pixel        overall exposure
-      saturated_frac    fraction of pixels pinned at >= 250 (clipped detail)
-      dynamic_range     p95 - p5 of the luminance histogram (contrast)
-      red_frame_frac    fraction of frames where a red-cylinder-like pixel
-                        cluster is detectable at all
+    安い統計4つで、その一瞥をゲートに変える:
+      mean_pixel        全体の露出
+      saturated_frac    250以上に張り付いた画素の割合（階調の飛び）
+      dynamic_range     輝度ヒストグラムの p95 - p5（コントラスト）
+      red_frame_frac    赤い円柱らしい画素の塊が、そもそも検出できた
+                        フレームの割合
     """
     import numpy as _np
     frames = []
@@ -57,7 +57,7 @@ def image_quality_report(rgb_list, cfg_iq, max_frames: int = 2000) -> dict:
     x = _np.concatenate(frames, axis=0)[:max_frames].astype(_np.float32)
     lum = x @ _np.array([0.299, 0.587, 0.114], dtype=_np.float32)
     r, g, b = x[..., 0], x[..., 1], x[..., 2]
-    # "reddish and clearly not grey": the block is (0.75, 0.08, 0.08)
+    # 「赤っぽく、灰色ではない」の判定。ワークの色は (0.75, 0.08, 0.08)
     red_mask = (r > g + 30) & (r > b + 30) & (r > 60)
     red_px = red_mask.reshape(red_mask.shape[0], -1).mean(axis=1)
     report = {
@@ -65,7 +65,7 @@ def image_quality_report(rgb_list, cfg_iq, max_frames: int = 2000) -> dict:
         "mean_pixel": float(x.mean()),
         "saturated_frac": float((x >= 250).mean()),
         "dynamic_range": float(_np.percentile(lum, 95) - _np.percentile(lum, 5)),
-        "red_frame_frac": float((red_px > 0.002).mean()),   # >0.2 % of pixels
+        "red_frame_frac": float((red_px > 0.002).mean()),   # 画素の0.2%超
     }
     fails = []
     if report["mean_pixel"] > float(cfg_iq.max_mean):
@@ -98,11 +98,11 @@ def main(cfg: DictConfig) -> None:
     data_dir = os.path.join(REPO_ROOT, "artifacts", "data")
     torch.manual_seed(cfg.seed)
 
-    # ARM_BCRL006: phase 1.5 (MimicGen) writes an AUGMENTED dataset. Prefer it
-    # when it exists so phases 2-10 need no other change; fall back to phase 1's
-    # output when MimicGen is disabled or has not run. Non-destructive on
-    # purpose -- bc_demos.pt always remains the untouched source, which is what
-    # makes phase 1.5 re-runnable and what MimicGen re-reads as its source.
+    # ARM_BCRL006 では、フェーズ1.5（MimicGen）が増補データセットを書く。
+    # それがあればそちらを優先するので、フェーズ2から10は他に何も変えなくて
+    # よい。MimicGen が無効、または未実行ならフェーズ1の出力に戻る。
+    # 非破壊なのは意図的で、bc_demos.pt は常に手を入れない元データとして
+    # 残る。だからフェーズ1.5は何度でも回せるし、MimicGen も毎回そこを読む。
     demo_path = os.path.join(data_dir, "bc_demos.pt")
     mg_path = os.path.join(data_dir, str(cfg.mimicgen.output_file))
     if bool(cfg.mimicgen.enable) and os.path.exists(mg_path):
@@ -146,7 +146,7 @@ def main(cfg: DictConfig) -> None:
         json.dump(summary, f, indent=2, ensure_ascii=False)
     print("[preprocess]", json.dumps(summary, indent=2))
 
-    # analysis: the review-relevant scalars, not 31 raw histograms
+    # 分析は査読に関係するスカラーだけ出す。生のヒストグラム31本は出さない
     flat = torch.cat(filt_obs).numpy()
     act = torch.cat(filt_act).numpy()
     eef = flat[:, 8:11]
@@ -165,19 +165,19 @@ def main(cfg: DictConfig) -> None:
     plotting.hist_grid(arrays, os.path.join(data_dir, "dataset_analysis.png"),
                        title="ARM_BCRL006 demonstration distribution (MuJoCo)")
 
-    # ---- wrist-camera frames -------------------------------------------
-    # The gate is about the CAMERA's configuration, so it reads phase 1's
-    # frames -- not whatever dataset happens to be used for training. That
-    # matters because phase 1.5 ships with the camera off (mimicgen.camera):
-    # its generated demos feed the state policy, and rendering ~3.5 GB of
-    # pixels nothing reads would be the largest single cost in the pipeline.
+    # ---- 手首カメラの画像 ------------------------------------------------
+    # このゲートが見るのはカメラの設定なので、読むのはフェーズ1の画像で、
+    # 学習に使うデータセットの方ではない。これが効くのは、フェーズ1.5が
+    # カメラOFFで出荷されているから（mimicgen.camera）。生成デモは状態方策
+    # 用で、誰も読まない3.5GBの画素を描けば、パイプライン最大の単一コストに
+    # なってしまう。
     cam_source = os.path.join(data_dir, "bc_demos.pt")
     cam_rgb = filt_rgb if (rgb_list is not None and len(filt_rgb) > 0) else None
     if cam_rgb is None and os.path.exists(cam_source):
-        # mmap: phase 1's archive is a few GB of uint8 frames and the gate only
-        # samples a few hundred of them. Reading it into RAM to look at 1 % of
-        # it is how a pipeline that ran fine on a server starts swapping on a
-        # laptop. Falls back to a normal load on any torch that refuses.
+        # mmap で読む。フェーズ1のアーカイブは数GBのuint8画像で、ゲートが
+        # 見るのはそのうち数百枚だけ。1%を見るために全部をRAMに載せるのが、
+        # 「サーバーでは快調だったパイプラインがノートPCでスワップし始める」
+        # 原因。拒否する torch なら普通の load に落ちる。
         try:
             cam_ds = torch.load(cam_source, weights_only=False, mmap=True,
                                 map_location="cpu")
@@ -206,7 +206,7 @@ def main(cfg: DictConfig) -> None:
         fig.savefig(os.path.join(data_dir, "camera_samples.png"), dpi=120)
         plt.close(fig)
 
-    # ---- wrist-camera data-quality GATE (ARM_BCRL006) --------------------
+    # ---- 手首カメラの画質ゲート（ARM_BCRL006） --------------------------
     iq = cfg.bc.get("image_quality", None)
     if cam_rgb and iq is not None and bool(iq.enable):
         report = image_quality_report(cam_rgb, iq)

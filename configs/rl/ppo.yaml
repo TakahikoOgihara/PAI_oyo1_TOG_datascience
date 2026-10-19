@@ -1,21 +1,21 @@
-# PPO fine-tuning FROM the BC weights -- stable-baselines3.
+# BC の重みから始める PPO 微調整。stable-baselines3 を使う。
 #
-# WHY SB3 AND NOT RSL-RL (which ARM_BCRL005 used): RSL-RL's runner is written
-# against Isaac Lab's vectorised-env wrapper and is not usable outside it
-# without re-implementing that wrapper against a moving API. stable-baselines3
-# is the mainstream general-purpose RL library, its VecEnv contract is stable
-# and documented, it writes TensorBoard scalars natively, and it has a first-
-# party W&B callback. The ALGORITHM is the same clipped-objective PPO and every
-# stabiliser ARM_BCRL005 needed is carried over (see below and
-# change log §8).
-num_envs: 64                 # MuJoCo is CPU; 64 arms in one model steps at
-                             # ~4k env-steps/s on the reference machine, which
-                             # is the sweet spot between batch size and latency
-rollout_steps: 32            # 64 * 32 = 2048 samples per iteration
-total_iterations: 300        # ~614k env-steps
-select_best_checkpoint: true # RL does not improve monotonically. Ship the
-                             # checkpoint that measures best in CLOSED LOOP,
-                             # not the last iteration.
+# RSL-RL（ARM_BCRL005 が使った）ではなく SB3 を選んだ理由。RSL-RL の
+# ランナーは Isaac Lab のベクトル化環境ラッパー前提で書かれていて、動く
+# API に対してそのラッパーを再実装しない限り、外では使えない。
+# stable-baselines3 は汎用RLライブラリの主流で、VecEnv の契約が安定して
+# 文書化されており、TensorBoard のスカラーを自分で書き、W&B の
+# コールバックも公式にある。アルゴリズムは同じクリップ目的の PPO で、
+# ARM_BCRL005 で必要だった安定化策はすべて引き継いである。詳細は
+# このファイルの下半分。
+num_envs: 64                 # MuJoCo はCPU。1モデルに64本のアームを入れると
+                             # 基準機で毎秒約4000環境ステップ進む。バッチ幅と
+                             # 遅延の釣り合いがここで最良になる
+rollout_steps: 32            # 64 * 32 = 1反復あたり2048標本
+total_iterations: 300        # 約614k環境ステップ
+select_best_checkpoint: true # RL は単調に良くならない。閉ループで最良を
+                             # 記録したチェックポイントを出荷する。最後の
+                             # 反復ではない。
 save_interval: 25
 
 gamma: 0.99
@@ -23,43 +23,43 @@ lam: 0.95
 clip: 0.2
 entropy_coef: 0.005
 value_coef: 1.0
-lr: 0.0001                   # fine-tuning from a good initialisation; 3e-4 is
-                             # too large and was one of the four causes of the
-                             # ARM_BCRL005 collapse
+lr: 0.0001                   # 良い初期値からの微調整なので小さめ。3e-4 は
+                             # 大きすぎて、ARM_BCRL005 の崩壊の4つの原因の
+                             # 1つだった
 target_kl: 0.02
 max_grad_norm: 1.0
 epochs: 5
 minibatches: 4
-hidden: [256, 128, 64]       # MUST equal bc.hidden
-activation: relu             # MUST match robomimic's MLP default
+hidden: [256, 128, 64]       # bc.hidden と一致させること
+activation: relu             # robomimic の MLP 既定に合わせること
 init_noise_std: 0.1
-output_activation: tanh      # robomimic's BC head ends in tanh; the PPO actor
-                             # gets the same head so the transferred weights
-                             # reproduce the BC policy exactly
-bc_init: true                # false = PPO from scratch (the ablation that
-                             # quantifies what the initialisation buys)
+output_activation: tanh      # robomimic の BC ヘッドは tanh で終わる。PPO の
+                             # アクターにも同じヘッドを付けるので、写した重みが
+                             # BC 方策をそのまま再現する
+bc_init: true                # false = PPO をゼロから回す（初期化が何を買って
+                             # いるかを数値化する比較）
 
-# --- the four stabilisers, in order of effect ---------------------------
-# ARM_BCRL005's first real run watched a BC policy at success 0.606 collapse to
-# 0.000 over 600 PPO iterations. The cause was NOT reward hacking or entropy
-# collapse: the critic diverged. A randomly-initialised critic facing BC-policy
-# returns of 800-1900 (the success_time_bonus pays up to ~2390 in one terminal
-# step) produced a value loss of 4e4, so advantage = returns - values was pure
-# noise and PPO pushed the policy along it. Once the policy never succeeds, the
-# sparse success gradient is gone and it cannot come back.
-reward_normalization: true   # 1. divide rewards by the running std of the
-                             #    discounted return -- puts the critic's
-                             #    regression target at O(1). This is the direct
-                             #    fix for the root cause (Engstrom et al. 2020;
-                             #    stable-baselines VecNormalize).
+# --- 4つの安定化策。効いた順 -------------------------------------------
+# ARM_BCRL005 の最初の本番は、成功率0.606の BC 方策が600反復の PPO で
+# 0.000 まで崩れるのを見ることになった。原因は報酬ハックでもエントロピー
+# 崩壊でもなく、クリティックの発散。ランダム初期化のクリティックが BC
+# 方策の 800〜1900 のリターン（success_time_bonus は終端1ステップで最大
+# 約2390払う）に当たって価値損失 4e4 を出し、advantage = returns - values
+# が純粋なノイズになり、PPO は方策をその方向へ押した。一度も成功しなく
+# なると疎な成功勾配が消えて、戻ってこられない。
+reward_normalization: true   # 1. 報酬を割引リターンの移動標準偏差で割り、
+                             #    クリティックの回帰目標を O(1) にする。
+                             #    根本原因への直接の対処
+                             #    （Engstrom et al. 2020、
+                             #    stable-baselines の VecNormalize）。
 reward_norm_clip: 10.0
-critic_warmup_iters: 40      # 2. freeze the actor for the first N iterations
-                             #    and fit the critic to the BC policy's returns
-bc_anchor_coef: 1.0          # 4. pull the actor back toward the BC snapshot
-bc_anchor_decay_iters: 260   #    every iteration, decaying to zero so RL can
-bc_anchor_min_coef: 0.0      #    still surpass BC. Same idea as the KL-to-SFT
-bc_anchor_lr: 0.0001         #    penalty in RLHF, and as DAPG's BC gradient
-bc_anchor_minibatch: 2048    #    term (Rajeswaran et al. 2018).
-promote_requires_bc_parity: true   # a policy that measures WORSE than BC in
-promote_bc_parity_tol: 0.0         # closed loop must not overwrite the
-                                   # deployed teacher phase 7 distils from
+critic_warmup_iters: 40      # 2. 最初のN反復はアクターを凍結し、クリティックを
+                             #    BC 方策のリターンに合わせる
+bc_anchor_coef: 1.0          # 4. 毎反復、アクターを BC のスナップショットへ
+bc_anchor_decay_iters: 260   #    引き戻す。0へ減衰させるので、RL は最終的に
+bc_anchor_min_coef: 0.0      #    BC を超えられる。RLHF の KL-to-SFT 罰則、
+bc_anchor_lr: 0.0001         #    DAPG の BC 勾配項（Rajeswaran et al. 2018）
+bc_anchor_minibatch: 2048    #    と同じ考え方。
+promote_requires_bc_parity: true   # 閉ループで BC より悪い方策は、フェーズ7が
+promote_bc_parity_tol: 0.0         # 蒸留元にする配備済みの教師を上書きしては
+                                   # ならない

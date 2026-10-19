@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Convert ARM_BCRL006's collected per-trajectory {obs, act, rgb} tensors into
-robomimic's standard dataset schema (the format
-``robomimic.utils.dataset.SequenceDataset`` and ``robomimic.scripts.train.train``
-expect) -- identical mechanism to ARM_BCRL001, only the env metadata changed:
+"""ARM_BCRL006 が集めた軌跡ごとの {obs, act, rgb} テンソルを、robomimic の
+標準データセット形式（``robomimic.utils.dataset.SequenceDataset`` と
+``robomimic.scripts.train.train`` が期待する形）に変換する。仕組みは
+ARM_BCRL001 と同一で、変わったのは環境のメタデータだけ:
 
-  /data                               (attrs: env_args = JSON env metadata)
+  /data                               (属性: env_args = JSON の環境メタデータ)
   /data/demo_0/obs/flat               [T_0, 31] float32
-  /data/demo_0/obs/rgb                [T_0, H, W, 3] uint8 (present iff frames were collected)
+  /data/demo_0/obs/rgb                [T_0, H, W, 3] uint8（画像を集めた場合のみ）
   /data/demo_0/actions                [T_0, 7] float32
-  /data/demo_0/dones                  [T_0]    int (1 on the last step)
-  /data/demo_0/rewards                [T_0]    float32 (zeros -- BC has no RL objective)
+  /data/demo_0/dones                  [T_0]    int（最終ステップで1）
+  /data/demo_0/rewards                [T_0]    float32（全0。BC に RL の目的は無い）
   /data/demo_0.attrs['num_samples']   T_0
-  /mask/train, /mask/valid            demo-key string arrays (train/val split)
+  /mask/train, /mask/valid            デモキーの文字列配列（学習/検証の分割）
 
-Images are stored uint8 HWC exactly as robomimic's own dataset tooling stores
-them. Trajectories are variable-length (episodes end early on success), so
-demo boundaries come directly from the input lists -- never a fixed-length
+画像は robomimic 自身のデータセット処理と同じく uint8 の HWC で保存する。
+軌跡は可変長（成功で早く終わる）なので、デモの境界は入力のリストから
+直接取る。固定長で切ることは決してしない。
 reshape.
 """
 
@@ -29,13 +29,13 @@ import torch
 
 
 def convert(demos_path: str, out_path: str, val_split: float, seed: int = 42) -> dict:
-    """``demos_path`` points at a {"obs": [T_i,F]..., "act": [T_i,A]...,
-    optional "rgb": [T_i,H,W,3] uint8...} dict of LISTS of per-trajectory
-    tensors produced by mujoco_sim/train_arm_mujoco.py --mode collect
-    (after src/preprocess.py filtering)."""
-    # torch >= 2.6 defaults to weights_only=True, which refuses a dict of
-    # tensor LISTS. These archives are produced by this repo, one step
-    # earlier in the same pipeline.
+    """``demos_path`` が指すのは {"obs": [T_i,F]..., "act": [T_i,A]...、
+    任意で "rgb": [T_i,H,W,3] uint8...} という、軌跡ごとのテンソルの
+    リストの辞書。mujoco_sim/train_arm_mujoco.py --mode collect が作り、
+    src/preprocess.py が絞り込んだもの。"""
+    # torch 2.6 以降は weights_only=True が既定で、テンソルのリストを
+    # 持つ辞書を拒否する。このアーカイブは同じパイプラインの1つ前の段で、
+    # このリポジトリ自身が作っている。
     ds = torch.load(demos_path, weights_only=False)
     obs_list, act_list = ds["obs"], ds["act"]
     rgb_list = ds.get("rgb", None)

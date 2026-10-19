@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
-"""ACT -- Action Chunking with Transformers (Zhao et al., RSS 2023) -- compact
-self-contained implementation for ARM_BCRL005.
+"""ACT（Action Chunking with Transformers、Zhao et al., RSS 2023）の、
+ARM_BCRL005 向けの小さな自己完結実装。
 
-Why self-contained instead of importing lerobot's trainer: the deployed
-artifact must be a clean single-graph ONNX (rgb + qpos -> action chunk) that
-TensorRT on the Jetson Orin Nano consumes; owning the ~250 lines keeps the
-export deterministic and pins zero fast-moving dependencies (the same reason
-ARM_BCRL001 kept its LeRobot phase optional). The architecture follows the
-paper: ResNet18 visual backbone -> transformer encoder over image tokens (+
-proprioception token + CVAE latent token) -> transformer decoder with `chunk`
-learned queries -> per-step action head. Trained with L1 reconstruction +
-KL(z || N(0,1)); inference uses z = 0 (the CVAE mean), one forward pass per
-chunk.
+lerobot の学習器を取り込まず自前で持つ理由。配備する成果物は、Jetson
+Orin Nano の TensorRT が食える綺麗な単一グラフの ONNX（rgb + qpos ->
+行動チャンク）でなければならない。約250行を自分で持てば書き出しは
+決定的になり、動きの速い依存を1つも固定しなくて済む（ARM_BCRL001 が
+LeRobot のフェーズを任意にしていたのと同じ理由）。構造は論文どおり。
+ResNet18 の視覚バックボーン -> 画像トークン（+ 自己受容トークン +
+CVAE の潜在トークン）に対する transformer エンコーダ -> `chunk` 個の
+学習クエリを持つ transformer デコーダ -> ステップごとの行動ヘッド。
+学習は L1 再構成 + KL(z || N(0,1))。推論では z = 0（CVAE の平均）を
+使い、1チャンクにつき順伝播1回。
 
-Image preprocessing (/255 + ImageNet normalization + HWC->CHW) is BAKED INTO
-forward(), so sim eval, ONNX validation and the Jetson runtime all feed raw
-uint8-scale frames -- the ARM_BCRL001 export convention.
+画像の前処理（/255 + ImageNet 正規化 + HWC->CHW）は forward() に
+焼き込んである。だからシミュレータ評価、ONNX の検証、Jetson の
+ランタイムが、どれも生の uint8 スケールの画像を渡せる。
 """
 
 from __future__ import annotations
@@ -29,27 +29,27 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
 def _resnet18_backbone(require_pretrained: bool = True) -> nn.Module:
-    """torchvision ResNet18 up to layer4 (B,512,H/32,W/32), ImageNet-pretrained.
+    """torchvision の ResNet18 を layer4 まで（B,512,H/32,W/32）。ImageNet 事前学習。
 
-    ARM_BCRL005 change (field-failure notes §2, cause H):
-    ARM_BCRL002 printed a WARNING and silently fell back to random weights
-    when the torch hub was unreachable -- which is the normal state of an
-    offline GPU container. A randomly-initialised ResNet18 cannot be trained
-    to convergence on a few hundred wrist-camera trajectories, so that
-    fallback quietly turns the deployed policy into a much weaker one while
-    every metric in the pipeline still looks "fine". A silent quality
-    downgrade in the artifact that ships is not an acceptable default.
+    ARM_BCRL005 での変更（実機の失敗記録の原因Hに対応）:
+    ARM_BCRL002 は、torch hub に届かないとき警告を出して黙って
+    ランダム初期化に落ちていた。オフラインのGPUコンテナでは、それが
+    普通の状態。ランダム初期化の ResNet18 は、手首カメラの軌跡
+    数百本では収束まで学習できない。つまりその退避動作は、配備する
+    方策を黙って弱いものに変えるのに、パイプラインの指標は全部
+    「問題なし」に見える。出荷する成果物が静かに劣化する既定値は、
+    受け入れられない。
 
-    setup_env.sh pre-caches the weights into the container. Pass
-    require_pretrained=False (visuomotor.train.require_pretrained_backbone)
-    only for a deliberate no-pretraining ablation.
+    setup_env.sh が重みをあらかじめキャッシュする。
+    require_pretrained=False（visuomotor.train.require_pretrained_backbone）
+    は、意図的な「事前学習なし」の比較のときだけ渡す。
     """
     import torchvision
     try:
         weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1
         net = torchvision.models.resnet18(weights=weights)
         print("[act] ResNet18 backbone: ImageNet-pretrained")
-    except Exception as e:  # offline / hub unreachable
+    except Exception as e:  # オフライン、または hub に届かない
         if require_pretrained:
             raise RuntimeError(
                 f"ImageNet weights for the ResNet18 backbone are unavailable ({e}).\n"
@@ -69,7 +69,7 @@ def _resnet18_backbone(require_pretrained: bool = True) -> nn.Module:
 
 
 class _ImagePreproc(nn.Module):
-    """(B,H,W,3) float in [0,255] -> normalized (B,3,H,W). Baked into ONNX."""
+    """(B,H,W,3) の [0,255] float -> 正規化した (B,3,H,W)。ONNX に焼き込む。"""
 
     def __init__(self):
         super().__init__()
@@ -111,8 +111,8 @@ class ACTPolicy(nn.Module):
         self.query_embed = nn.Parameter(torch.randn(1, chunk, dim_model) * 0.02)
         self.action_head = nn.Linear(dim_model, act_dim)
 
-        # CVAE encoder (training only; ONNX export drops it): infers the
-        # style latent z from the ground-truth action chunk
+        # CVAE のエンコーダ（学習時のみ。ONNX の書き出しでは落とす）。
+        # 正解の行動チャンクから、作法を表す潜在 z を推定する
         self.cvae_act_proj = nn.Linear(act_dim, dim_model)
         self.cvae_qpos_proj = nn.Linear(qpos_dim, dim_model)
         self.cvae_cls = nn.Parameter(torch.randn(1, 1, dim_model) * 0.02)
@@ -150,8 +150,8 @@ class ACTPolicy(nn.Module):
     # -------------------------------------------------------------- api
     def forward(self, rgb: torch.Tensor, qpos: torch.Tensor,
                 actions: torch.Tensor | None = None):
-        """Training (actions given): returns (a_hat, mu, logvar).
-        Inference (actions None): returns a_hat with z = 0."""
+        """学習時（actions あり）は (a_hat, mu, logvar) を返す。
+        推論時（actions が None）は z = 0 で a_hat を返す。"""
         B = rgb.shape[0]
         if actions is not None:
             mu, logvar = self._cvae_latent(qpos, actions)
@@ -171,8 +171,8 @@ class ACTPolicy(nn.Module):
 
 
 class ACTInference(nn.Module):
-    """ONNX export wrapper: (rgb, qpos) -> action chunk, z = 0 (CVAE mean).
-    Output is clamped to the env's action range."""
+    """ONNX 書き出し用のラッパー。(rgb, qpos) -> 行動チャンク、z = 0（CVAE の平均）。
+    出力は環境の行動範囲にクランプする。"""
 
     def __init__(self, policy: ACTPolicy):
         super().__init__()

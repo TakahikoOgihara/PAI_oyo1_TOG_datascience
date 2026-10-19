@@ -1,40 +1,40 @@
 # -*- coding: utf-8 -*-
-"""Experiment tracking: MLflow + Weights & Biases + TensorBoard, all local.
+"""実験管理。MLflow + Weights & Biases + TensorBoard。全部ローカル。
 
-Three tools because they answer three different questions, and a consultant who
-installs all three without being able to say which question each one answers has
-installed nothing:
+3つ使うのは、3つが別の問いに答えるから。3つ入れておいて、どれがどの
+問いに答えるのか言えないなら、それは何も入れていないのと同じ、という
+考えで分けている:
 
-  MLflow      the RUN LEDGER -- params, metrics, artifacts, and the Model
-              Registry that decides which ONNX is "champion". This is the
-              system of record: src/infer.py reads the registry to pick what
-              ships, so MLflow is load-bearing, not reporting.
-  W&B         the LIVE VIEW -- curves you watch while a run is in flight
-              (PPO per rollout, ACT per epoch), plus a closed-loop evaluation
-              table and bar chart written at INFERENCE time, so one project
-              page answers "did it actually get better".
-  TensorBoard the DEBUG VIEW -- per-iteration PPO scalars (value loss, entropy,
-              explained variance, approx KL) written natively by
-              stable-baselines3, and robomimic's own BC curves. When RL
-              collapses, this is the only one of the three with the resolution
-              to say why.
+  MLflow      実行の台帳。パラメータ、指標、成果物、そしてどの ONNX が
+              「優勝」かを決めるモデルレジストリ。これが記録の正本で、
+              src/infer.py は何を出荷するかをレジストリから読む。
+              つまり MLflow は報告用ではなく、荷重を受けている。
+  W&B         生の眺め。走っている最中に見る曲線（PPO はロールアウト
+              ごと、ACT はエポックごと）に加えて、推論時に書く閉ループ
+              評価の表と棒グラフ。1つのプロジェクトのページで
+              「本当に良くなったのか」に答えられる。
+  TensorBoard デバッグ用。stable-baselines3 が自前で書く反復ごとの PPO
+              スカラー（価値損失、エントロピー、説明分散、近似KL）と、
+              robomimic 自身の BC 曲線。RL が崩れたときに理由を言える
+              解像度を持つのは、3つの中でこれだけ。
+              使い分けはここで固定してある。
 
-Everything is local by default: MLflow on a SQLite file, W&B in offline mode,
-TensorBoard on the event files. No account, no API key, no network -- which is
-what makes the stack usable on a client engagement where data cannot leave the
-machine. ``wandb login`` + ``mlops.wandb.mode=online`` is the only change needed
-to stream to the cloud instead.
+既定では全部ローカル。MLflow は SQLite ファイル、W&B はオフライン、
+TensorBoard はイベントファイル。アカウントもAPIキーもネットワークも
+要らない。それが、データを機外に出せない案件でこの構成が使える理由。
+クラウドへ流したいなら ``wandb login`` と ``mlops.wandb.mode=online``、
+変更はそれだけ。
 
-RL002 hand-rolled its own ``ExperimentTracker`` (manifest.json + metrics.csv)
-and called it "MLflow-style". RL003 uses the actual libraries instead:
+RL002 は ``ExperimentTracker`` を自作して（manifest.json と metrics.csv）
+「MLflow 風」と呼んでいた。RL003 は実物のライブラリを使う:
 
-  * MLflow   -- ``mlflow.start_run`` / ``log_params`` / ``log_metrics`` /
-                ``log_artifacts`` against a local ``file:`` tracking URI.
-                Every run auto-snapshots the fully-resolved Hydra config.
-  * W&B      -- ``WANDB_MODE=offline`` env vars set here so BOTH our own
-                ``mlflow_run`` context AND RSL-RL's built-in
-                ``WandbSummaryWriter`` (``logger: wandb`` in the runner cfg)
-                write to the same local run without any account/API key.
+  * MLflow   ローカルの ``file:`` の tracking URI に対して
+                ``mlflow.start_run`` / ``log_params`` / ``log_metrics`` /
+                ``log_artifacts``。各 run で解決済みの Hydra 設定を自動保存する。
+  * W&B      ``WANDB_MODE=offline`` の環境変数をここで立てるので、自前の
+                ``mlflow_run`` の文脈でも、RSL-RL 内蔵の
+                ``WandbSummaryWriter``（runner 設定の ``logger: wandb``）でも、
+                アカウントもAPIキーも無しで同じローカルの run に書く。
 """
 
 from __future__ import annotations
@@ -49,20 +49,20 @@ from omegaconf import DictConfig, OmegaConf
 
 
 def _patch_wandb_working_set() -> None:
-    """Kept from ARM_BCRL005; a no-op on a clean local install.
+    """ARM_BCRL005 から残したもの。綺麗なローカル環境では何もしない。
 
-    Work around a real bug triggered by an Isaac Sim Python environment:
-    ``wandb.util.working_set()`` (called by every ``wandb.init()``, including
-    RSL-RL's built-in ``WandbSummaryWriter``, to log installed-package
-    provenance) only suppresses ``KeyError``/``UnicodeDecodeError``/``TypeError``
-    per-package. Isaac Sim ships a few extension-bundled ``pip_prebundle``
-    dist-info directories with no METADATA file at all (e.g.
-    ``isaacsim.robot_motion.pink/pip_prebundle/eigenpy-3.13.0.dist-info``),
-    which raises ``importlib_metadata.MetadataNotFound`` -- a ``FileNotFoundError``
-    subclass wandb's suppress list does not cover -- and crashes the run before
-    the first training iteration. Patched here (once, before any
-    ``wandb.init()``) to also tolerate that, rather than vendoring a fix into
-    Isaac Sim's bundled packages.
+    Isaac Sim の Python 環境で実際に出るバグの回避。
+    ``wandb.util.working_set()``（インストール済みパッケージの出どころを
+    記録するために、RSL-RL 内蔵の ``WandbSummaryWriter`` を含む全ての
+    ``wandb.init()`` が呼ぶ）は、パッケージごとに
+    ``KeyError``/``UnicodeDecodeError``/``TypeError`` しか抑えない。
+    Isaac Sim は METADATA を持たない ``pip_prebundle`` の dist-info を
+    いくつか同梱していて（例:
+    ``isaacsim.robot_motion.pink/pip_prebundle/eigenpy-3.13.0.dist-info``）、
+    そこで ``importlib_metadata.MetadataNotFound``（wandb の抑制一覧に
+    無い ``FileNotFoundError`` の子）が飛び、最初の反復より前に run が
+    落ちる。Isaac Sim の同梱パッケージに手を入れる代わりに、ここで
+    （``wandb.init()`` より前に1回だけ）当てる。
     """
     import contextlib
     import wandb.util as _wandb_util
@@ -84,22 +84,22 @@ _WANDB_SETTINGS_PATCHED = False
 
 
 def _patch_wandb_settings() -> None:
-    """Work around a second incompatibility between RSL-RL's built-in
-    ``WandbSummaryWriter`` and the wandb shipped in this Isaac Sim Python:
-    the writer calls ``wandb.Settings(start_method="thread")``, but wandb
-    rebuilt ``Settings`` as a pydantic model with ``extra="forbid"`` and
-    dropped ``start_method`` (the service-launch knob it named is gone). The
-    call therefore raises
-    ``ValidationError: start_method Extra inputs are not permitted`` from
-    ``runner.learn()`` -- i.e. AFTER the env, the runner and the BC weight
-    transfer are all up -- and kills the PPO phase.
+    """RSL-RL 内蔵の ``WandbSummaryWriter`` と、この Isaac Sim の Python に
+    入っている wandb との、2つ目の非互換の回避。writer は
+    ``wandb.Settings(start_method="thread")`` を呼ぶが、wandb は
+    ``Settings`` を ``extra="forbid"`` の pydantic モデルに作り替え、
+    ``start_method``（指していたサービス起動の切り替え自体が無くなった）を
+    落とした。だから呼び出しは
+    ``ValidationError: start_method Extra inputs are not permitted`` を
+    ``runner.learn()`` から出す。つまり環境、ランナー、BC の重み移植が
+    全部立ち上がった後で、PPO のフェーズを殺す。
 
-    Patched here (once, before any ``wandb.init()``) by replacing the
-    ``wandb.Settings`` module attribute -- the one third-party callers such as
-    RSL-RL use; wandb's own internals import the class directly -- with a
-    subclass that drops keyword arguments the installed version no longer
-    knows about. Nothing is vendored into Isaac Sim's site-packages, and the
-    patch is a no-op on a wandb that still accepts ``start_method``.
+    回避はここで（``wandb.init()`` より前に1回だけ）、``wandb.Settings``
+    のモジュール属性を差し替える。RSL-RL のような外部の呼び出し側が使うのは
+    そちらで、wandb の内部はクラスを直接 import している。差し替え先は、
+    入っている版が知らないキーワード引数を落とす子クラス。Isaac Sim の
+    site-packages には何も持ち込まないし、``start_method`` を今も受け取る
+    wandb では何もしない。
     """
     global _WANDB_SETTINGS_PATCHED
     if _WANDB_SETTINGS_PATCHED:
@@ -110,7 +110,7 @@ def _patch_wandb_settings() -> None:
     base = wandb.Settings
     fields = getattr(base, "model_fields", None)
     if not fields:
-        # pre-pydantic wandb: unknown settings are tolerated by wandb itself.
+        # pydantic より前の wandb。未知の設定は wandb 自身が許す。
         _WANDB_SETTINGS_PATCHED = True
         return
 
@@ -125,17 +125,17 @@ def _patch_wandb_settings() -> None:
         return kwargs
 
     try:
-        # a subclass keeps ``isinstance(x, wandb.Settings)`` working for anyone
-        # who checks the type of what they were handed
+        # 子クラスにしておけば、渡されたものの型を確認する人のために
+        # ``isinstance(x, wandb.Settings)`` が動き続ける
         class _CompatSettings(base):  # type: ignore[misc, valid-type]
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **_drop_unknown(kwargs))
 
         wandb.Settings = _CompatSettings
     except Exception:
-        # pydantic refused the subclass: fall back to a plain factory, which
-        # still fixes the only caller we care about (RSL-RL constructs, never
-        # isinstance-checks, wandb.Settings)
+        # pydantic が子クラスを拒んだ場合。素の工場関数に落ちる。それでも
+        # 気にすべき唯一の呼び出し側は直る（RSL-RL は wandb.Settings を
+        # 構築するだけで、isinstance で見ることはない）
         def _compat_settings(*args, **kwargs):
             return base(*args, **_drop_unknown(kwargs))
 
@@ -144,13 +144,13 @@ def _patch_wandb_settings() -> None:
 
 
 def wandb_summary_writer_supported() -> bool:
-    """True when RSL-RL's ``WandbSummaryWriter`` can actually be constructed
-    against the installed wandb (after the patches above).
+    """RSL-RL の ``WandbSummaryWriter`` が、入っている wandb に対して
+    （上の回避を当てたうえで）実際に構築できるなら True。
 
-    Used to pick ``logger:`` for the RSL-RL runner: if W&B turns out to be
-    unusable for a reason we have not seen yet, the PPO run falls back to
-    TensorBoard instead of dying hours into a pipeline -- MLflow records the
-    params/metrics either way.
+    RSL-RL のランナーの ``logger:`` を選ぶのに使う。まだ見たことのない
+    理由で W&B が使えないとき、PPO の実行はパイプラインの数時間後に死ぬ
+    のではなく TensorBoard に落ちる。どちらにしても MLflow が
+    パラメータと指標を記録する。
     """
     try:
         _patch_wandb_working_set()
@@ -158,7 +158,7 @@ def wandb_summary_writer_supported() -> bool:
         import wandb
         wandb.Settings(start_method="thread")
         return True
-    except Exception as exc:  # pragma: no cover -- environment-dependent
+    except Exception as exc:  # pragma: no cover -- 環境に依存する
         print(f"[wandb] RSL-RL's WandbSummaryWriter is unusable here ({exc!r}); "
               f"falling back to the TensorBoard logger for this run")
         return False
@@ -197,12 +197,12 @@ def _flatten(d: dict, prefix: str = "") -> dict:
 
 
 def wandb_env(cfg: DictConfig) -> None:
-    """Configure W&B env vars before any ``wandb.init()`` (ours or RSL-RL's).
+    """``wandb.init()``（自前も RSL-RL のものも）より前に W&B の環境変数を立てる。
 
-    Offline by default: a real W&B run is written to ``mlops.wandb.dir`` with
-    no external network call / API key. Run ``wandb login`` once and set
-    ``mlops.wandb.mode=online`` to sync it to the cloud later -- no code
-    changes required.
+    既定はオフライン。本物の W&B の run を ``mlops.wandb.dir`` に書き、
+    外部への通信もAPIキーも無し。``wandb login`` を1回して
+    ``mlops.wandb.mode=online`` にすれば、後からクラウドへ同期できる。
+    コードの変更は要らない。
     """
     _patch_wandb_working_set()
     _patch_wandb_settings()
@@ -217,8 +217,8 @@ def wandb_env(cfg: DictConfig) -> None:
 
 @contextmanager
 def mlflow_run(cfg: DictConfig, run_name: str):
-    """Open an MLflow run against the local file-store tracking URI and log
-    the fully-resolved Hydra config + environment provenance as params/tags.
+    """ローカルのファイル保存の tracking URI に対して MLflow の run を開き、
+    解決済みの Hydra 設定と環境の出どころを、パラメータとタグとして記録する。
     """
     mlflow.set_tracking_uri(cfg.mlops.mlflow.tracking_uri)
     mlflow.set_experiment(cfg.mlops.mlflow.experiment_name)
@@ -235,18 +235,18 @@ def mlflow_run(cfg: DictConfig, run_name: str):
 
 @contextmanager
 def wandb_run(cfg: DictConfig, run_name: str):
-    """Open our own W&B run for training loops that have no built-in W&B
-    writer of their own to hand ``mlops.wandb`` config to (e.g. robomimic's
-    BC trainer, see ``scripts/train_bc_robomimic.py``).
+    """自前の W&B の run を開く。W&B の書き出しを内蔵していない学習ループ、
+    つまり ``mlops.wandb`` の設定を渡す先が無いもののため
+    （例: robomimic の BC 学習器。``scripts/train_bc_robomimic.py`` 参照）。
 
-    robomimic *does* have a built-in W&B logger
-    (``config.experiment.logging.log_wandb``), but it hard-asserts on
-    ``robomimic.macros.WANDB_ENTITY`` being pre-configured via
-    ``robomimic/scripts/setup_macros.py`` and retries failed inits 10x with a
-    30s sleep between attempts -- fragile machinery this project does not
-    want to depend on. We disable that path and log the same run information
-    (params + final metrics) through a plain ``wandb.init()``/``wandb.log()``/
-    ``wandb.finish()`` here instead, exactly like ``mlflow_run`` above.
+    robomimic にも W&B のロガーはある
+    （``config.experiment.logging.log_wandb``）が、
+    ``robomimic.macros.WANDB_ENTITY`` が ``robomimic/scripts/setup_macros.py``
+    で事前設定されていることを強く要求し、init の失敗を30秒おきに10回
+    再試行する。このプロジェクトが依存したくない脆い仕掛け。だからその
+    経路は切り、同じ情報（パラメータと最終指標）を素の
+    ``wandb.init()``/``wandb.log()``/``wandb.finish()`` でここから記録する。
+    上の ``mlflow_run`` と同じやり方。
     """
     _patch_wandb_working_set()
     _patch_wandb_settings()
@@ -265,15 +265,15 @@ def wandb_run(cfg: DictConfig, run_name: str):
 
 
 # ---------------------------------------------------------------------------
-# ARM_BCRL006 additions: TensorBoard, and W&B at EVALUATION / INFERENCE time.
+# ARM_BCRL006 での追加。TensorBoard と、評価／推論時の W&B。
 # ---------------------------------------------------------------------------
 @contextmanager
 def tensorboard_writer(cfg: DictConfig, run_name: str):
-    """A SummaryWriter under ``mlops.tensorboard.dir``, or None when disabled.
+    """``mlops.tensorboard.dir`` の下の SummaryWriter。無効なら None。
 
-    stable-baselines3 writes its own TensorBoard scalars, so this is for the
-    phases that do not: the BC and visuomotor trainers. One ``tensorboard
-    --logdir artifacts`` then shows every phase of the pipeline on one page.
+    stable-baselines3 は自分で TensorBoard のスカラーを書くので、これは
+    書かないフェーズ（BC と視覚運動方策の学習器）のため。``tensorboard
+    --logdir artifacts`` で、パイプラインの全フェーズが1ページに出る。
     """
     tb = cfg.mlops.get("tensorboard", None)
     if tb is None or not bool(tb.enabled):
@@ -293,15 +293,15 @@ def tensorboard_writer(cfg: DictConfig, run_name: str):
 def wandb_log_eval(cfg: DictConfig, run_name: str, results: dict,
                    metrics: tuple = ("success_rate", "mean_max_lift",
                                      "mean_place_err", "mean_reward")) -> None:
-    """Log a CLOSED-LOOP evaluation to W&B as a table plus one bar chart panel.
+    """閉ループの評価を、表と棒グラフ1枚として W&B に記録する。
 
-    ``results``: {method_name: {metric: value}}.
+    ``results``: {手法名: {指標: 値}}。
 
-    Training curves tell you a loss went down. They cannot tell you whether the
-    robot does the task -- for that you need the closed-loop numbers, and those
-    are produced at inference time, after every trainer has exited. Sending
-    them to the same W&B project as the curves is what makes the project page
-    answer the only question a stakeholder asks.
+    学習曲線は損失が下がったことを教えてくれるが、ロボットが仕事をするか
+    は言えない。それには閉ループの数値が必要で、その数値は全ての学習器が
+    終わった後、推論時に出る。曲線と同じ W&B のプロジェクトへ送ることが、
+    関係者が聞く唯一の問いに、プロジェクトのページで答えられる条件。
+    だから評価の数値もここへ送る。
     """
     if not cfg.mlops.wandb.enabled or cfg.mlops.wandb.mode == "disabled":
         return
@@ -332,13 +332,13 @@ def wandb_log_eval(cfg: DictConfig, run_name: str, results: dict,
 
 def import_tensorboard_curves_to_wandb(cfg: DictConfig, event_dir: str,
                                        run_name: str, prefix: str = "") -> int:
-    """Replay a TensorBoard event directory into a W&B run.
+    """TensorBoard のイベントのディレクトリを、W&B の run へ流し込む。
 
-    robomimic owns its BC training loop and offers no per-epoch hook, but it
-    does write TensorBoard events. Reading them back after the trainer exits
-    puts the BC curve on the same W&B page as the PPO and ACT curves, which is
-    what "one place to look" actually requires. Best-effort: a missing or
-    unreadable event file must never fail a training run.
+    robomimic は自分の BC の学習ループを持っていて、エポックごとのフックを
+    出さない。ただし TensorBoard のイベントは書く。学習器が終わった後で
+    それを読み直せば、BC の曲線が PPO と ACT の曲線と同じ W&B のページに
+    乗る。「見る場所は1つ」を実際に成り立たせるのはそれ。最善努力で、
+    イベントファイルが無い・読めないことが学習を失敗させてはならない。
     """
     if not cfg.mlops.wandb.enabled or cfg.mlops.wandb.mode == "disabled":
         return 0

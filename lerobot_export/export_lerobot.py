@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 5 (optional) -- export the demonstrations to the
-LeRobot dataset format.
+"""ARM_BCRL006 フェーズ5（任意）。デモを LeRobot のデータセット形式へ
+書き出す。
 
-LeRobot (HuggingFace) is the emerging industry-standard interchange format
-for robot-learning demonstrations (ALOHA/SO-10x ecosystems, ACT / Diffusion
-Policy trainers all consume it). This exporter converts the SAME processed
-demos the robomimic pipeline trains on into a LeRobotDataset, so the project
-demonstrates fluency in BOTH of the two formats a physical-AI consultant
-actually encounters: robomimic HDF5 (NVIDIA/Isaac ecosystem) and LeRobot
+LeRobot（HuggingFace）は、ロボット学習のデモ交換形式として事実上の
+標準になりつつある（ALOHA/SO-10x 系、ACT や Diffusion Policy の学習器が
+どれもこれを食う）。この書き出しは、robomimic のパイプラインが学習に
+使うのと同じ処理済みデモを LeRobotDataset に変換する。だから、物理AIの
+仕事で実際に出会う2つの形式、robomimic HDF5（NVIDIA / Isaac 系）と
+LeRobot（HuggingFace 系）の両方を扱えることを示せる。
 (HuggingFace ecosystem).
 
-Honest scoping note: a PUBLIC LeRobot dataset records someone else's robot
-and scene, so it cannot be closed-loop evaluated in this MuJoCo
-environment (embodiment mismatch). The portable, verifiable direction is the
-one implemented here: OUR sim demos -> LeRobot format (usable by any LeRobot
-trainer, shareable on the Hub).
+範囲についての正直な注記。公開されている LeRobot のデータセットは
+他人のロボットとシーンの記録なので、この MuJoCo 環境では閉ループ評価
+できない（身体が違う）。移植できて検証もできる向きは、ここで実装した
+方向、つまり自分のシミュレータのデモ -> LeRobot 形式（どの LeRobot の
+学習器でも使えて、Hub でも共有できる）。
 
-This phase is OPTIONAL and self-skipping: lerobot is not part of the
-isaac-lab-train container's verified base install; ``pip install lerobot``
-enables it. run_all.sh treats a failure here as a warning, never a pipeline
-stop. The LeRobot dataset API is still evolving, so the create/add_frame
-calls are defensively wrapped with clear version-mismatch messages.
+このフェーズは任意で、自分でスキップする。lerobot は環境構築の検証済み
+の土台には入っていないので、``pip install lerobot`` で有効になる。
+run_all.sh はここでの失敗を警告として扱い、パイプラインは止めない。
+LeRobot のデータセットAPIはまだ動いているので、create/add_frame の
+呼び出しは、版違いが分かるメッセージ付きで防御的に包んである。
 
 Usage:  python lerobot_export/export_lerobot.py [--fps 20] [--repo-id arm_bcrl006/pickplace]
 """
@@ -41,7 +41,7 @@ TASK_TEXT = "Pick up the red cylinder block, move it 5 cm and put it down (myCob
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fps", type=int, default=20)  # matches env control_dt=0.05
+    ap.add_argument("--fps", type=int, default=20)  # 環境の control_dt=0.05 に合わせる
     ap.add_argument("--repo-id", type=str, default="arm_bcrl006/pickplace")
     ap.add_argument("--demos", type=str,
                     default=os.path.join(REPO_ROOT, "artifacts", "data", "bc_processed_demos.pt"))
@@ -77,7 +77,7 @@ def main() -> int:
 
     root = os.path.join(args.out, args.repo_id.replace("/", "_"))
     if os.path.exists(root):
-        shutil.rmtree(root)  # deterministic re-export (artifacts dir only)
+        shutil.rmtree(root)  # 決定的に書き出し直す（artifacts ディレクトリのみ）
         # rootで指定されたディレクトリを、中にあるファイルやサブディレクトリごと全部削除する処理です。
         # shutilはPython標準ライブラリで、ファイルやディレクトリをまとめて操作します。
     os.makedirs(os.path.dirname(root), exist_ok=True)
@@ -105,7 +105,7 @@ def main() -> int:
                 dataset.add_frame(frame, task=TASK_TEXT)
                 # 作成した1フレームを、現在構築中のエピソードに追加します。
             except TypeError:
-                # older API: task passed inside the frame dict
+                # 古いAPI。task はフレームの辞書の中で渡す
                 frame["task"] = TASK_TEXT
                 dataset.add_frame(frame)
             n_frames += 1

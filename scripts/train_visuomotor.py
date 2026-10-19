@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 8 -- visuomotor policy training (ACT default, Diffusion
-Policy via visuomotor.type=diffusion).
+"""ARM_BCRL006 フェーズ8。視覚運動方策の学習（既定 ACT、
+visuomotor.type=diffusion で Diffusion Policy）。
 
-Input dataset: artifacts/data/visuomotor_demos.pt -- the RL-champion teacher
-rollouts recorded with the wrist camera by phase 7 (--mode distill). Fallback
-(visuomotor.source=expert, or when no distill file exists): the phase-1
-scripted-expert demos. Either way each frame pairs (wrist RGB, qpos) with the
-teacher's action, and training-time augmentation (color jitter + random
-shift) supplies the light domain randomization.
+入力データセットは artifacts/data/visuomotor_demos.pt。フェーズ7
+（--mode distill）が、RL の優勝教師のロールアウトを手首カメラ付きで
+記録したもの。退避（visuomotor.source=expert、または distill の
+ファイルが無いとき）はフェーズ1のスクリプトエキスパートのデモ。
+どちらでも各フレームは（手首RGB, qpos）と教師の行動の対で、学習時の
+増補（色の揺らぎ + ランダムずらし）が軽いドメインランダム化を与える。
 
-Outputs (artifacts/deploy/):
-  * ACT      : arm_bcrl006_act_policy.onnx        (rgb+qpos -> action chunk)
-  * Diffusion: arm_bcrl006_dp_policy.onnx         (encoder: rgb+qpos -> emb)
-               arm_bcrl006_dp_policy_denoiser.onnx (DDIM loop body)
-ONNX metadata carries policy_type/chunk/ddim_steps/... so every consumer
-(sim eval's OnnxPolicy, deploy/jetson/policy_runtime.py) self-configures from
-the file. Registered in the MLflow Model Registry with a champion alias,
-exactly like the BC/RL models. No Isaac Sim / AppLauncher needed here.
+出力（artifacts/deploy/）:
+  * ACT      : arm_bcrl006_act_policy.onnx        （rgb+qpos -> 行動チャンク）
+  * Diffusion: arm_bcrl006_dp_policy.onnx         （エンコーダ: rgb+qpos -> 埋め込み）
+               arm_bcrl006_dp_policy_denoiser.onnx（DDIM のループ本体）
+ONNX のメタデータが policy_type/chunk/ddim_steps などを運ぶので、利用側
+（シミュレータ評価の OnnxPolicy、deploy/jetson/policy_runtime.py）は
+ファイルから自分で構成する。BC / RL のモデルと同じく、MLflow の
+レジストリに優勝の別名付きで登録する。ここに Isaac Sim は要らない。
 """
 
 from __future__ import annotations
@@ -113,20 +113,20 @@ def _build_model(cfg: DictConfig, device) -> torch.nn.Module:
 
 @torch.no_grad()
 def _val_metrics(model, loader, device, ptype: str) -> tuple[float, float]:
-    """-> (training-objective val loss, DEPLOYMENT-condition action L1).
+    """-> (学習目的での検証損失, 配備条件での行動L1)。
 
-    ARM_BCRL006 change: ARM_BCRL002 selected its best checkpoint on the
-    training objective alone. For ACT that objective is L1 + kl_weight * KL
-    evaluated with a SAMPLED CVAE latent -- but the exported ONNX always
-    runs with z = 0 (the CVAE mean). The number the checkpoint was chosen by
-    was therefore not the number the shipped graph produces.
+    ARM_BCRL006 での変更。ARM_BCRL002 は学習目的だけで最良の
+    チェックポイントを選んでいた。ACT のその目的は L1 + kl_weight * KL を
+    CVAE の潜在を標本化して評価したもの。しかし書き出す ONNX は常に
+    z = 0（CVAE の平均）で走る。つまりチェックポイントを選んだ数値は、
+    出荷したグラフが出す数値ではなかった。
 
-    ``val_l1_deploy`` is the mean absolute action error under exactly the
-    deployed condition, so it is directly interpretable: multiply by
-    env.action_scale (0.05 rad) to read it as radians of per-joint, per-step
-    command error, and by the chunk length to bound the open-loop drift over
-    one receding-horizon window. That is what makes it usable as an
-    acceptance criterion (operations guide §4).
+    ``val_l1_deploy`` は、まさに配備条件での行動の平均絶対誤差なので、
+    そのまま解釈できる。env.action_scale（0.05 rad）を掛ければ、関節
+    ごと・ステップごとの指令誤差をラジアンで読める。チャンク長を
+    掛ければ、1つの後退ホライズン窓での開ループのずれを押さえられる。
+    だからこれを受け入れ基準として使える。学習目的の損失では
+    そうはいかない。
     """
     model.eval()
     tot, l1_tot, n = 0.0, 0.0, 0
@@ -172,7 +172,7 @@ def _export_diffusion(model: DiffusionPolicy, v, onnx_path: str) -> tuple[dict, 
     val_enc = onnx_export.validate_onnx_multi(enc, specs, onnx_path, n=4)
     lat = onnx_export.benchmark_latency_multi(enc, specs, onnx_path, iters=30)
 
-    # denoiser graph (int64 timestep input -> custom export, not the helper)
+    # デノイザのグラフ（int64 の時刻入力。補助関数ではなく自前で書き出す）
     den = model.denoiser.eval().cpu()
     den_path = onnx_path.replace(".onnx", "_denoiser.onnx")
     K, emb = int(v.chunk), int(v.diffusion.obs_embed_dim)
@@ -183,11 +183,11 @@ def _export_diffusion(model: DiffusionPolicy, v, onnx_path: str) -> tuple[dict, 
         dynamic_axes={"noisy_chunk": {0: "batch"}, "timestep": {0: "batch"},
                       "obs_emb": {0: "batch"}, "eps": {0: "batch"}},
         opset_version=17)
-    try:  # legacy exporter: torch>=2.9 dynamo default can bake batch=1 (see mlops/export.py)
+    try:  # 旧来の書き出し。torch 2.9 以降の dynamo 既定は batch=1 を焼き込み得る（mlops/export.py 参照）
         torch.onnx.export(den, dummy, den_path, dynamo=False, **den_kwargs)
     except TypeError:
         torch.onnx.export(den, dummy, den_path, **den_kwargs)
-    # validate the denoiser graph against torch
+    # デノイザのグラフを torch と突き合わせて検証する
     import onnxruntime as ort
     sess = ort.InferenceSession(den_path, providers=["CPUExecutionProvider"])
     x = torch.randn(4, K, ACT_DIM)
@@ -287,12 +287,12 @@ def main(cfg: DictConfig) -> float:
                 _wb.log({"train_loss": train_loss, "val_loss": val_loss,
                          "val_l1_deploy": val_l1})
             if _tb is not None:
-                # NOTE: not `k, v` -- `v` is the config alias (cfg.visuomotor)
-                # used by the loop bound and the ONNX export below.
+                # 注意。`k, v` ではない。`v` は設定の別名（cfg.visuomotor）で、
+                # 下のループの上限と ONNX の書き出しが使っている。
                 for _k, _val in (("train_loss", train_loss), ("val_loss", val_loss),
                                  ("val_l1_deploy", val_l1)):
                     _tb.add_scalar(f"{ptype}/{_k}", _val, epoch)
-            # select on the DEPLOYED condition, not the training objective
+            # 選ぶ基準は配備条件。学習目的ではない
             if val_l1 < best_val:
                 best_val = val_l1
                 best_state = {k: t.detach().cpu().clone() for k, t in model.state_dict().items()}

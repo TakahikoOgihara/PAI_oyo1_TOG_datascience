@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Run the simulator in N parallel processes and merge the shards.
+"""シミュレータをN個のプロセスで並列に回し、分割結果を結合する。
 
-WHY THIS EXISTS. Measured on the reference machine (WSL2, RTX 5050 Laptop):
-MuJoCo steps 64 environments at ~4 000 env-steps/s, but the graphics stack
-renders a 224x224 wrist frame in ~20 ms and DOES NOT get meaningfully faster
-with EGL, GLFW or OSMesa, nor with more processes (operations guide §5). Demo
-collection is therefore render-bound by roughly two orders of magnitude, and
-the only lever that helps is running several independent simulators at once:
-each worker owns its own MjModel, MjData and GL context, so nothing is shared
-and nothing contends except the GPU/CPU rasteriser itself.
+存在理由。基準機（WSL2、RTX 5050 Laptop）で実測すると、MuJoCo の物理は
+64環境で毎秒約4000環境ステップ進むのに、グラフィックスは 224x224 の
+手首画像1枚に約20ms かかる。しかも EGL、GLFW、OSMesa のどれに替えても、
+プロセスを増やしても目立って速くならない。だからデモ収集は2桁の差で
+描画律速で、効く手は独立したシミュレータを同時に何本も走らせることだけ。
+各ワーカーが自分の MjModel、MjData、GLコンテキストを持つので、共有する
+ものは何も無く、競合するのは GPU/CPU のラスタライザ本体だけになる。
+読み戻しを分散できるのが、この構成の効き目。
 
-This is also just the standard shape of the problem -- ``SubprocVecEnv`` in
-stable-baselines3, ``num_workers`` in a DataLoader, N pods behind a queue. The
-detail that matters for correctness is the SEED: every shard offsets it
-(``train_arm_mujoco.py::_shard_seed``), so the union of the shards is still one
-i.i.d. sample rather than N copies of the same episodes.
+形としては定番の並列化そのもので、stable-baselines3 の ``SubprocVecEnv``、
+DataLoader の ``num_workers``、キューの後ろに並ぶN個のPodと同じ。正しさに
+関わるのはシードで、各シャードがシードをずらす
+（``train_arm_mujoco.py::_shard_seed``）。だからシャードの和集合は、
+同じエピソードのN本の複製ではなく、1つの独立同分布の標本になる。
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ DATA_DIR = os.path.join(REPO_ROOT, "artifacts", "data")
 
 
 def auto_workers(requested: int, cap: int = 6) -> int:
-    """0 = auto. Capped because the bottleneck is one shared rasteriser: past
-    ~6 processes the aggregate frame rate stops improving and the memory does
-    not."""
+    """0 を指定すると自動。上限を設けているのは、律速が1つのラスタライザの
+    共有だから。プロセスを6個より増やしても合計のフレームレートは伸びず、
+    メモリだけ増える。"""
     if int(requested) > 0:
         return int(requested)
     return max(1, min(cap, (os.cpu_count() or 4) // 3))
@@ -41,7 +41,7 @@ def auto_workers(requested: int, cap: int = 6) -> int:
 
 def run_sharded(mode: str, workers: int, extra: list, out_stem: str,
                 env_overrides: dict | None = None) -> list:
-    """Launch ``workers`` simulator processes and wait. -> list of shard paths."""
+    """``workers`` 個のシミュレータプロセスを起動して待つ。-> シャードのパス一覧。"""
     procs = []
     env = dict(os.environ)
     env.setdefault("MUJOCO_GL", "osmesa")
@@ -68,7 +68,7 @@ def run_sharded(mode: str, workers: int, extra: list, out_stem: str,
 
 
 def merge_shards(paths: list, out_path: str, delete: bool = True) -> dict:
-    """Concatenate the per-shard trajectory lists into one dataset."""
+    """シャードごとの軌跡リストを1つのデータセットに連結する。"""
     merged: dict = {}
     for p in paths:
         d = torch.load(p, map_location="cpu", weights_only=False)
@@ -90,8 +90,8 @@ def merge_shards(paths: list, out_path: str, delete: bool = True) -> dict:
 
 
 def merge_summaries(stem: str, workers: int, out_name: str) -> dict:
-    """Sum the per-shard counters into one summary so the acceptance checks in
-    operations guide read one file regardless of how the run was sharded."""
+    """シャードごとのカウンタを合算して1つの要約にする。これで受け入れ判定は、
+    何本に分割して走らせても1つのファイルを読めば済む。"""
     import json
     total = {"trajectories": 0, "kept_trajectories": 0, "dropped_trajectories": 0,
              "kept_transitions": 0, "attempts": 0, "generated": 0,

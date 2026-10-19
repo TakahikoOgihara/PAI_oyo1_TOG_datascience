@@ -1,49 +1,49 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 phase 3 -- behavioral-cloning training with robomimic (NVIDIA's own
-imitation-learning library -- also the algorithm backend Isaac Lab Mimic's
-data-generation workflows target).
+"""ARM_BCRL006 フェーズ3。robomimic（NVIDIA 自身の模倣学習ライブラリで、
+Isaac Lab Mimic のデータ生成が狙うアルゴリズムの土台でもある）による
+行動クローンの学習。
 
-The earlier projects in this series called robomimic's real training entry point
-(``robomimic.scripts.train.train(config, device)``) on a state-only (8-dim)
-dataset. BC004 keeps that exact structure and upgrades the observation to the
-multimodal contract the collected demos now carry:
+この系列の前のプロジェクトでは、robomimic の本当の学習入口
+（``robomimic.scripts.train.train(config, device)``）を、状態だけの
+8次元データセットに対して呼んでいた。BC004 はその構造をそのまま保ち、
+観測を、集めたデモが持つマルチモーダルの契約へ上げた:
 
-  * obs/flat : the frozen 31-dim state vector
-               (low_dim modality -- robomimic MLP branch)
-  * obs/rgb  : 224x224x3 uint8 wrist-camera frames
-               (rgb modality -- robomimic's stock VisualCore encoder:
-                ResNet18Conv backbone + SpatialSoftmax pooling. This is
-                robomimic's canonical visuomotor-BC configuration, selected
-                purely by LISTING the key under observation.modalities.obs.rgb
-                -- no custom network code.)
+  * obs/flat : 凍結した31次元の状態ベクトル
+               （low_dim モダリティ。robomimic の MLP 枝）
+  * obs/rgb  : 224x224x3 の uint8 手首カメラ画像
+               （rgb モダリティ。robomimic 標準の VisualCore
+                エンコーダ = ResNet18Conv + SpatialSoftmax。
+                これが robomimic の正統な視覚運動BCの構成で、
+                選び方は observation.modalities.obs.rgb に鍵を
+                並べるだけ。自作のネットワークは書かない。）
 
-Two deliberate config changes vs the AMR BC projects, both consequences of going visuomotor:
+視覚運動にしたことの帰結として、AMR の BC から意図的に変えた設定が2つ:
 
-  * ``train.hdf5_normalize_obs = False`` -- robomimic's obs-normalization
-    path would compute mean/std over the image tensor too, which is neither
-    meaningful nor what any robomimic image config does; images are handled
-    by the library's own /255 + HWC->CHW processing instead. Dropping
-    normalization ALSO removes the library's documented
-    "no obs-normalization with validation" limitation that forced the AMR BC projects to
-    disable validation...
-  * ...so ``experiment.validate = True`` here: robomimic now keeps
-    "_best_validation_" checkpoints (the /mask/valid split written by
-    bc_hdf5/to_robomimic_hdf5.py), and _find_best_checkpoint picks those --
-    the standard early-model-selection robomimic workflow.
+  * ``train.hdf5_normalize_obs = False``。robomimic の観測正規化の経路は、
+    画像テンソルに対しても平均と標準偏差を計算してしまう。それは意味が
+    無いし、robomimic のどの画像設定もそうしていない。画像はライブラリ
+    自身の /255 と HWC->CHW で扱う。正規化を外すと、AMR の BC で検証を
+    切らせていた「観測正規化と検証は併用できない」という文書化された
+    制限も一緒に消える。
+    だから外してある。
+  * ...そこで ``experiment.validate = True`` にしてある。robomimic は
+    「_best_validation_」のチェックポイントを残すようになり
+    （/mask/valid の分割は bc_hdf5/to_robomimic_hdf5.py が書く）、
+    _find_best_checkpoint がそれを選ぶ。標準的な早期選択の流れ。
 
-The exported ONNX bakes the image processing (/255, HWC->CHW) into the graph
-so the ROS2/eval side feeds raw frames -- see _MultiModalExportAdapter.
-Config is Hydra's (configs/config.yaml + configs/{env,bc,mlops}/*.yaml) with
-Optuna multirun support; no simulator is needed here at all.
+書き出す ONNX は画像の前処理（/255、HWC->CHW）をグラフに焼き込むので、
+評価側は生のフレームを渡せる。_MultiModalExportAdapter を参照。
+設定は Hydra（configs/config.yaml と configs/{env,bc,mlops}/*.yaml）で、
+Optuna の multirun にも対応。ここではシミュレータは一切要らない。
 
-ARM_BCRL006 additions:
-  * robomimic's own TensorBoard curves are replayed into W&B after training, so
-    the BC loss sits on the same project page as the PPO and ACT curves.
-    robomimic owns its training loop and exposes no per-epoch hook, so a
-    post-run import is the honest way to get them there.
-  * robomimic is installed with --no-deps (its egl_probe dependency is a CMake
-    extension that only serves robosuite's offscreen renderer, which this
-    project never uses). See change log §7.
+ARM_BCRL006 での追加:
+  * robomimic 自身の TensorBoard の曲線を、学習後に W&B へ流し込む。だから
+    BC の損失が、PPO と ACT の曲線と同じプロジェクトのページに並ぶ。
+    robomimic は学習ループを自分で持ち、エポックごとのフックを出さない
+    ので、終わった後に取り込むのが正直なやり方。
+  * robomimic は --no-deps で入れる（依存の egl_probe は CMake の拡張で、
+    robosuite のオフスクリーン描画のためだけに存在し、このプロジェクトは
+    使わない）。
 """
 
 from __future__ import annotations
@@ -106,18 +106,18 @@ def build_robomimic_config(cfg: DictConfig, hdf5_path: str, exp_name: str, use_r
     """
     with config.values_unlocked():
         config.experiment.name = exp_name
-        # Validation is ON in BC004 (see module docstring: possible because
-        # obs normalization is off), so "_best_validation_" checkpoints exist.
+        # 検証は BC004 ではON（冒頭参照。観測正規化を切ったので可能）。
+        # だから「_best_validation_」のチェックポイントが存在する。
         config.experiment.validate = True
         config.experiment.logging.log_tb = True
-        # robomimic's OWN wandb logger hard-asserts on robomimic.macros.WANDB_ENTITY
-        # being pre-configured -- disabled in favor of mlops.tracking.wandb_run(),
-        # exactly as in the AMR BC projects.
+        # robomimic 自身の wandb ロガーは robomimic.macros.WANDB_ENTITY の
+        # 事前設定を強く要求する。AMR の BC と同じく、
+        # mlops.tracking.wandb_run() を使うのでこちらは切る。
         config.experiment.logging.log_wandb = False
         config.experiment.logging.wandb_proj_name = cfg.mlops.wandb.project
-        config.experiment.rollout.enabled = False  # closed-loop eval is src/evaluate.py's job (Isaac Lab)
+        config.experiment.rollout.enabled = False  # 閉ループ評価は src/evaluate.py の仕事
         config.experiment.save.enabled = True
-        config.experiment.save.every_n_epochs = int(cfg.bc.num_epochs)  # always keep a final checkpoint
+        config.experiment.save.every_n_epochs = int(cfg.bc.num_epochs)  # 最後のチェックポイントは常に残す
         config.experiment.save.on_best_validation = True
 
         config.train.data = hdf5_path
@@ -125,28 +125,28 @@ def build_robomimic_config(cfg: DictConfig, hdf5_path: str, exp_name: str, use_r
         config.train.hdf5_filter_key = "train"
         config.train.hdf5_validation_filter_key = "valid"
         config.train.hdf5_normalize_obs = False
-        # Caching every 84x84x3 frame in RAM ("all") is what robomimic's own
-        # image configs avoid; "low_dim" keeps vectors cached and streams
-        # images from HDF5 -- the library's recommended image-dataset mode.
+        # 84x84x3 のフレームを全部RAMに持つ（"all"）のは、robomimic 自身の
+        # 画像設定も避けている。"low_dim" ならベクトルはキャッシュし、画像は
+        # HDF5 から流す。ライブラリが画像データセットに推奨するやり方。
         config.train.hdf5_cache_mode = "low_dim" if use_rgb else "all"
         config.train.seq_length = 1
         config.train.batch_size = int(batch_size)
         config.train.num_epochs = int(cfg.bc.num_epochs)
-        # ARM_BCRL006: one EPOCH = one full pass over the split, not a fixed
-        # number of gradient steps. robomimic defaults to
-        # epoch_every_n_steps=100 / validation_epoch_every_n_steps=10 and then
-        # calls next() that many times on a loader that may have fewer batches
-        # -- which raises StopIteration and kills the run on any dataset
-        # smaller than those defaults assume (it does, on the ablation's
-        # smaller datasets). None means "iterate the loader", which is both
-        # safe and the more honest meaning of bc.num_epochs.
+        # ARM_BCRL006 では、1エポック = 分割を1周で、固定回数の勾配ステップ
+        # ではない。robomimic の既定は epoch_every_n_steps=100 /
+        # validation_epoch_every_n_steps=10 で、バッチ数がそれより少ない
+        # ローダに対してもその回数 next() を呼ぶ。だから既定が想定するより
+        # 小さいデータセットでは StopIteration で実行が死ぬ（比較実験の
+        # 小さいデータセットで実際に死ぬ）。None は「ローダを1周する」の意味で、
+        # 安全で、しかも bc.num_epochs の意味としても正直。
+        # だから None にしてある。
         config.experiment.epoch_every_n_steps = None
         config.experiment.validation_epoch_every_n_steps = None
         config.train.seed = int(cfg.seed)
         config.train.dataset_keys = ["actions", "dones"]
         config.observation.modalities.obs.low_dim = ["flat"]
-        # THE image-BC switch: listing "rgb" here makes robomimic build its
-        # default VisualCore (ResNet18Conv + SpatialSoftmax) encoder for it.
+        # 画像BCの切り替えはここ。"rgb" を並べると robomimic が既定の
+        # VisualCore（ResNet18Conv + SpatialSoftmax）を作る。
         config.observation.modalities.obs.rgb = ["rgb"] if use_rgb else []
 
         config.algo.actor_layer_dims = list(cfg.bc.hidden)
@@ -157,14 +157,14 @@ def build_robomimic_config(cfg: DictConfig, hdf5_path: str, exp_name: str, use_r
 
 
 class _MultiModalExportAdapter(nn.Module):
-    """Tensor-in/tensor-out wrapper around robomimic's ActorNetwork for ONNX.
+    """robomimic の ActorNetwork を、ONNX 用にテンソル入出力で包む。
 
-    Inputs (positional, matching mlops.export.export_onnx_multi's specs):
-      flat : (B, F) float32 -- fed raw (BC004 trains without obs normalization)
-      rgb  : (B, H, W, 3) float32 in [0, 255] -- the raw camera frame; the
-             /255 scaling and HWC->CHW transpose robomimic's ObsUtils applies
-             at train time are BAKED IN here, so the deployment side never
-             re-implements preprocessing.
+    入力（位置引数。mlops.export.export_onnx_multi の仕様に対応）:
+      flat : (B, F) float32。そのまま渡す（BC004 は観測正規化なしで学習）
+      rgb  : (B, H, W, 3) float32 の [0, 255]。生のカメラ画像。robomimic の
+             ObsUtils が学習時に当てる /255 と HWC->CHW は、ここに焼き込んで
+             ある。だから配備側が前処理を書き直すことは無い。
+             形はそのままで渡せる。
     """
 
     def __init__(self, policy_net: nn.Module, use_rgb: bool,
@@ -200,12 +200,12 @@ _best_validation_ という名前を含むcheckpointを優先して候補にし�
 
 
 def export_checkpoint_to_onnx(ckpt_path: str, onnx_path: str, device) -> tuple[dict, dict]:
-    """Load a robomimic ``.pth`` checkpoint and export/validate/benchmark it as
-    ONNX. Handles both the multimodal (flat+rgb) and flat-only cases, and both
-    with/without baked normalization stats -- everything is read back from the
-    checkpoint itself (shape metadata + normalization stats), so this function
-    needs no external knowledge of how the model was configured. Reused by
-    src/infer.py against the MLflow-registry champion."""
+    """robomimic の ``.pth`` を読み、ONNX として書き出し・検証・計測する。
+    マルチモーダル（flat+rgb）と flat だけの場合、正規化統計を焼き込む
+    場合と焼き込まない場合の、どれも扱える。必要なもの（形のメタデータと
+    正規化統計）は全部チェックポイントから読み直すので、この関数は
+    モデルがどう設定されたかを外から知る必要がない。src/infer.py が
+    MLflow レジストリの優勝モデルに対して再利用する。"""
     policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=False)
     """
     checkpointからpolicyと辞書を読む
@@ -225,7 +225,7 @@ def export_checkpoint_to_onnx(ckpt_path: str, onnx_path: str, device) -> tuple[d
     flat_dim = int(all_shapes["flat"][0]) if "flat" in all_shapes else None
     use_rgb = "rgb" in all_shapes
     if use_rgb:
-        # robomimic stores processed shapes (C, H, W); the adapter takes raw (H, W, C)
+        # robomimic は処理後の形 (C, H, W) を保存する。アダプタは生の (H, W, C) を取る
         c, h, w = (int(v) for v in all_shapes["rgb"])
         rgb_spec = ("rgb", (h, w, c))
 
@@ -309,10 +309,10 @@ def main(cfg: DictConfig) -> float:
               "training state-only (re-collect with the camera to get frames)")
     print(f"[train_bc] dataset: flat_dim={shapes['flat_dim']} rgb_shape={shapes['rgb_shape']} use_rgb={use_rgb}")
 
-    # robomimic's loaders use drop_last=True, so a batch larger than a quarter
-    # of the split leaves too few batches to train (or validate) on. Clamping
-    # here keeps the configured batch size for real runs and keeps short runs
-    # -- the ablation, a smoke test -- from silently doing nothing.
+    # robomimic のローダは drop_last=True なので、分割の4分の1より大きい
+    # バッチにすると、学習（や検証）に足るバッチ数が残らない。ここで
+    # 抑えておけば、本番の実行では設定したバッチ幅のままで、短い実行
+    # （比較実験、スモークテスト）が黙って何もしないことも防げる。
     n_valid = _dataset_rows(hdf5_path, "valid")
     batch_size = max(16, min(int(cfg.bc.batch_size), n_valid // 2,
                              _dataset_rows(hdf5_path, "train") // 4))
@@ -386,9 +386,9 @@ def main(cfg: DictConfig) -> float:
         print(f"[train_bc] registered arm_bcrl006_bc_policy v{version.version}; champion={is_champion}")
         mlflow.log_artifact(onnx_path, artifact_path="deploy")
 
-    # robomimic's TensorBoard curves -> W&B (see the module docstring).
-    # It nests the run under a timestamp directory of its own making, so the
-    # path is discovered rather than assumed.
+    # robomimic の TensorBoard の曲線 -> W&B（冒頭参照）。
+    # robomimic は自分で作ったタイムスタンプのディレクトリの下に run を
+    # 入れるので、パスは決め打ちではなく探して見つける。
     tb_dirs = sorted(glob.glob(os.path.join(base_output_dir, "*", "logs", "tb")),
                      key=os.path.getmtime)
     tb_dir = tb_dirs[-1] if tb_dirs else os.path.join(base_output_dir, "logs", "tb")

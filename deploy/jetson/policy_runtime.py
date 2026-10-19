@@ -1,28 +1,28 @@
 # -*- coding: utf-8 -*-
-"""ARM_BCRL006 policy runtime -- runs ON the Jetson Orin Nano 8GB.
+"""ARM_BCRL006 の方策ランタイム。Jetson Orin Nano 8GB の上で走る。
 
-Closes the real control loop that the simulator trained:
+シミュレータで学習した、実機の制御ループを閉じる:
 
-  USB wrist camera (on the Jetson)                      20 Hz control ticks
-      -> center-crop + resize to the TRAINED camera spec
-      -> TensorRT (or onnxruntime) visuomotor policy: ACT chunk / DP DDIM
-      -> unit joint-DELTA commands over LAN (JSON/TCP)
-      -> Raspberry Pi 4B bridge (deploy/raspi/mycobot_bridge_server.py)
-      -> myCobot 280 Pi servos
+  USB の手首カメラ（Jetson 側）                20Hz の制御刻み
+      -> 学習したカメラ仕様へ中央切り出し + 縮小
+      -> TensorRT（または onnxruntime）の視覚運動方策。ACT のチャンク / DP の DDIM
+      -> 単位の関節差分指令を LAN（JSON/TCP）で送る
+      -> Raspberry Pi 4B のブリッジ（deploy/raspi/mycobot_bridge_server.py）
+      -> myCobot 280 Pi のサーボ
 
-and simultaneously serves a WebSocket telemetry/command endpoint (default
-:8765) that the operator-PC web app (deploy/operator_pc/webapp) connects to:
-live camera JPEG + joint state out, start/pause/jog/gripper/home/e-stop in.
+同時に WebSocket のテレメトリ／指令の口（既定 :8765）を開き、操作用PCの
+Webアプリ（deploy/operator_pc/webapp）が繋ぐ。カメラのJPEGと関節状態を
+出し、開始／一時停止／ジョグ／グリッパ／原点復帰／非常停止を受ける。
 
-Inputs come from the edge bundle exported by the pipeline (src/infer.py):
+入力は、パイプラインが書き出すエッジ配布物（src/infer.py）から来る:
   edge_bundle/
-    arm_bcrl006_act_policy.onnx   (or _dp_policy.onnx + _dp_policy_denoiser.onnx)
-    edge_config.json              (control contract + camera spec + chunking)
+    arm_bcrl006_act_policy.onnx   （または _dp_policy.onnx + _dp_policy_denoiser.onnx）
+    edge_config.json              （制御の契約 + カメラ仕様 + チャンク設定）
     deploy_report.json
 
 Run:
   python3 policy_runtime.py --bundle ~/edge_bundle --pi 192.168.10.10:9000 \
-      --engine act_policy_fp16.engine        # omit --engine for ORT fallback
+      --engine act_policy_fp16.engine        # --engine を省くと ORT に落ちる
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from trt_runner import InferenceBackend
 
 
 # --------------------------------------------------------------------------
-# DDIM (diffusion variant) -- MUST match arm_policy/diffusion.py's schedule
+# DDIM（拡散版）。arm_policy/diffusion.py のスケジュールと必ず一致させる
 # --------------------------------------------------------------------------
 def ddim_alphas(diffusion_steps: int) -> np.ndarray:
     s = 0.008
@@ -69,7 +69,7 @@ def ddim_sample(denoiser, obs_emb, chunk, act_dim, alphas_cumprod, ddim_steps):
 
 
 # --------------------------------------------------------------------------
-# Pi bridge client (newline-delimited JSON over TCP)
+# Pi ブリッジのクライアント（TCP 上の改行区切り JSON）
 # --------------------------------------------------------------------------
 class PiClient:
     def __init__(self, host: str, port: int):
@@ -115,8 +115,8 @@ class PiClient:
         return self.call({"cmd": "stop"})
 
     def home_and_wait(self, timeout_s: float = 8.0) -> dict:
-        """Command the training 'ready' pose and WAIT until the arm reports
-        it reached it. Returns the final state dict (``homed`` tells you)."""
+        """学習時の 'ready' 姿勢を指令し、アームが到達したと報告するまで待つ。
+        最後の状態の辞書を返す（``homed`` で分かる）。"""
         self.home()
         deadline = time.time() + timeout_s
         st = self.state()
@@ -153,8 +153,8 @@ class Camera:
                 time.sleep(0.05)
 
     def policy_rgb(self) -> np.ndarray | None:
-        """Center square crop + resize to the trained input -- EXACTLY the
-        transform the sim camera spec assumes (square 224x224 out of the real
+        """正方の中央切り出し + 学習した入力への縮小。シミュレータのカメラ仕様が
+        前提にしている変換そのもの（実画像から正方の 224x224 を作る）。
         4:3 sensor)."""
         with self.lock:
             f = None if self.frame_bgr is None else self.frame_bgr.copy()
@@ -207,15 +207,15 @@ class Runtime:
                              self.image_size)
 
         self.mode = "pause"          # pause | auto
-        self.grip_cmd = 1.0          # last gripper command sent (binary)
-        # The policy's OWN gripper channel value, fed back as qpos[6]. The
-        # simulator feeds the raw (clamped) action there, so binarising it
-        # here -- as ARM_BCRL002 did -- shifts the proprioception the policy
-        # sees away from its training distribution for free
-        # (field-failure notes §2, cause G).
+        self.grip_cmd = 1.0          # 最後に送ったグリッパ指令（2値）
+        # 方策自身が出したグリッパのチャンネル値を、qpos[6] として戻す。
+        # シミュレータはそこへ生の（クランプした）行動を入れているので、
+        # ここで2値化すると（ARM_BCRL002 がそうしていた）、方策が見る自己
+        # 受容感覚が、何の得も無く学習時の分布からずれる
+        # （実機の失敗記録の原因G）。
         self.grip_qpos = 1.0
         self.buf = None
-        self.cursor = self.chunk     # empty -> infer on first tick
+        self.cursor = self.chunk     # 空なら最初の刻みで推論する
         self.latency_ms = 0.0
         self.loop_hz = 0.0
         self.safety = {"latched": False, "reason": "ok"}
@@ -239,7 +239,7 @@ class Runtime:
         self.latency_ms = (time.perf_counter() - t0) * 1e3
         return chunk
 
-    # ---- control loop ---------------------------------------------------
+    # ---- 制御ループ -----------------------------------------------------
     def control_loop(self):
         next_t = time.perf_counter()
         ticks, t_rate = 0, time.perf_counter()
@@ -250,9 +250,9 @@ class Runtime:
                     state = self.pi.state()
                     self.safety = state.get("safety", self.safety)
                     self.homed = bool(state.get("homed", self.homed))
-                    # The Pi's guard is the authority. If it latched, the arm
-                    # is already held; the policy must stop streaming so the
-                    # operator sees a stable state and decides what to do.
+                    # 権限を持つのは Pi のガード。ラッチしたなら、アームはすでに
+                    # 保持されている。方策は送信を止め、操作者が安定した状態を見て
+                    # 何をするか決められるようにする。
                     if self.safety.get("latched"):
                         self.status_msg = (f"safety stop: "
                                            f"{self.safety.get('reason')} "
@@ -263,8 +263,8 @@ class Runtime:
                     if self.cursor >= self.execute_horizon:
                         rgb = self.camera.policy_rgb()
                         if rgb is None:
-                            # no fresh frame: NEVER keep executing a stale
-                            # chunk open-loop -- hold instead
+                            # 新しい画像が無いとき。古いチャンクを開ループで実行し続けるのは
+                            # 絶対にしない。保持する。
                             self.status_msg = "no camera frame -> holding"
                             self.pi.deltas([0.0] * 6, self.grip_cmd)
                             continue
@@ -291,18 +291,18 @@ class Runtime:
             if delay > 0:
                 time.sleep(delay)
             else:
-                next_t = time.perf_counter()  # overrun: don't spiral
+                next_t = time.perf_counter()  # 刻みを超過。追いかけて悪化させない
 
-    # ---- operator commands ---------------------------------------------
+    # ---- 操作者からの指令 -----------------------------------------------
     def handle_cmd(self, msg: dict) -> None:
         action = msg.get("action")
         if action == "start":
-            # HOMING IS NOT OPTIONAL. Every training episode starts from the
-            # "ready" pose, so starting the policy anywhere else feeds it a
-            # state (and a camera view) it has never seen -- the systematic,
-            # 10-out-of-10 failure mode of ARM_BCRL002
-            # (field-failure notes §2, cause A). Home, verify, then
-            # run; refuse otherwise.
+            # 原点復帰は任意ではない。学習の全エピソードは "ready" 姿勢から
+            # 始まるので、別の場所から方策を動かすのは、見たことのない状態
+            # （とカメラ視点）を与えること。ARM_BCRL002 が実機で10回中10回
+            # 失敗した系統的な原因がこれ（実機の失敗記録の原因A）。
+            # 原点復帰して、確認して、それから走らせる。できなければ
+            # 拒否する。
             try:
                 st = self.pi.state()
                 self.safety = st.get("safety", self.safety)
@@ -327,7 +327,7 @@ class Runtime:
             except Exception as e:
                 self.status_msg = f"REFUSED to start: bridge unreachable ({e})"
                 return
-            self.cursor = self.chunk  # force fresh inference
+            self.cursor = self.chunk  # 推論を強制的にやり直す
             self.buf = None
             self.status_msg = "running"
             self.mode = "auto"
@@ -387,7 +387,7 @@ class Runtime:
 
 
 # --------------------------------------------------------------------------
-# websocket server (operator PC connects here)
+# WebSocket サーバ（操作用PCがここへ繋ぐ）
 # --------------------------------------------------------------------------
 async def ws_main(rt: Runtime, port: int):
     import asyncio

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""What ships: the ONNX graph and the safety envelope that travels with it.
+"""出荷するもの。ONNX のグラフと、それと一緒に運ばれる安全包絡。
 
-ARM_BCRL002 deployed a policy that measured 0.55 success and 64 mm placement
-error in simulation and went 0-for-10 on hardware. Two of the three causes are
-covered here: the graph must compute what the trained model computes, and the
-release gate must actually refuse.
+ARM_BCRL002 は、シミュレータで成功率0.55・設置誤差64mmの方策を配備して、
+実機で10回中0回だった。3つの原因のうち2つをここで覆う。グラフは
+学習したモデルと同じものを計算しないといけないし、リリースゲートは
+実際に拒否しないといけない。
 """
 
 import os
@@ -17,11 +17,11 @@ from mlops import export as onnx_export
 
 
 def test_onnx_export_matches_torch_and_supports_batching(tmp_path):
-    """dynamic_axes has to survive the export. torch >= 2.9's dynamo exporter
-    silently SPECIALISES the batch dimension, which produces a graph that works
-    for the one-sample validation and fails the moment the sim evaluates 64
-    environments at once -- mlops/export.py forces the legacy tracer for this
-    reason, and this is the test that notices if that stops working."""
+    """dynamic_axes は書き出しを越えて生き残らないといけない。torch 2.9 以降の
+    dynamo の書き出しはバッチ次元を黙って固定し、1標本の検証は通るのに
+    シミュレータが64環境を同時に評価した瞬間に落ちるグラフを作る。
+    mlops/export.py がこの理由で旧来のトレーサを強制していて、それが
+    効かなくなったら気づくのがこのテスト。"""
     torch.manual_seed(0)
     model = nn.Sequential(nn.Linear(31, 64), nn.ReLU(), nn.Linear(64, 7), nn.Tanh())
     path = str(tmp_path / "p.onnx")
@@ -37,8 +37,8 @@ def test_onnx_export_matches_torch_and_supports_batching(tmp_path):
 
 
 def test_release_gate_refuses_a_policy_that_cannot_work():
-    """The gate is the cheapest control in the pipeline and the one thing that
-    turns 'we have an MLOps stack' into 'our MLOps stack decides what ships'."""
+    """ゲートはパイプラインでいちばん安い管理策で、「MLOps の仕組みがある」を
+    「うちの MLOps が出荷を決めている」に変える唯一の部品。"""
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from omegaconf import OmegaConf
@@ -48,32 +48,31 @@ def test_release_gate_refuses_a_policy_that_cannot_work():
                             "env": {"floor": {"z": 0.0, "clearance": 0.005}}})
     good = {"success_rate": 0.62, "mean_place_err": 0.031, "mean_max_lift": 0.071}
     assert _release_gate(cfg, good, "ACT")
-    # the exact ARM_BCRL002 artifact: 55 % success, 64 mm error, 69 mm lift
+    # ARM_BCRL002 の成果物そのもの。成功率55%、誤差64mm、持ち上げ69mm
     bad = {"success_rate": 0.553, "mean_place_err": 0.064, "mean_max_lift": 0.069}
     assert not _release_gate(cfg, bad, "ACT")
     cfg.deploy.force = True
-    assert _release_gate(cfg, bad, "ACT")      # explicit override still possible
+    assert _release_gate(cfg, bad, "ACT")      # 明示的な上書きは今もできる
 
 
 def test_edge_config_carries_the_safety_envelope():
-    """The Pi must READ the floor plane and rate limit, never have them typed
-    in again: two copies of a safety constant is one copy of a safety constant
-    plus a bug waiting to happen."""
+    """Pi は床の平面とレート制限を読まないといけない。二度打ちはしない。
+    安全の定数が2つあるのは、安全の定数が1つあることと、いつか起きるバグが
+    1つあることの合計。"""
     import sys
     from omegaconf import OmegaConf
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, root)
     safety = OmegaConf.load(os.path.join(root, "configs", "safety", "default.yaml"))
     env = OmegaConf.load(os.path.join(root, "configs", "env", "mycobot_pickplace.yaml"))
-    # the simulator's plane and the robot's plane are the same two numbers
+    # シミュレータの平面とロボットの平面は、同じ2つの数
     assert float(safety.floor_z) == float(env.floor.z)
     assert float(safety.floor_clearance) == float(env.floor.clearance)
-    # the guard's per-tick joint-speed limit IS the simulator's joint velocity
-    # limit expressed per control step: the policy is trained against exactly
-    # the rate the robot will enforce, so it never learns a motion the hardware
-    # will clip
+    # ガードの刻みごとの関節速度の上限は、シミュレータの関節速度の上限を
+    # 制御ステップあたりで表したもの。方策はロボットが強制するのと同じ
+    # レートに対して学習するので、ハードウェアが切る動きを学ぶことがない
     assert np.isclose(float(safety.max_joint_step),
                       float(env.robot.arm_velocity_limit) * float(env.control_dt))
-    # ... and it must not be TIGHTER than the largest step the action space can
-    # command, or the guard would be fighting the policy on every saturated step
+    # …そして、行動空間が指令できる最大のステップより厳しくてもいけない。
+    # 厳しいと、飽和した刻みごとにガードが方策と戦うことになる
     assert float(safety.max_joint_step) >= float(env.action_scale) - 1e-9

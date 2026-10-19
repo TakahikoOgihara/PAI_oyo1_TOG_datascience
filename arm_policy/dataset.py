@@ -1,28 +1,28 @@
 # -*- coding: utf-8 -*-
-"""Chunked visuomotor dataset for ACT / Diffusion Policy training.
+"""ACT / Diffusion Policy 学習用の、チャンク化した視覚運動データセット。
 
-Reads the trajectory dict written by mujoco_sim/train_arm_mujoco.py
-(--mode distill -> artifacts/data/visuomotor_demos.pt, or --mode collect ->
-bc_demos.pt as the expert-source fallback):
+mujoco_sim/train_arm_mujoco.py が書いた軌跡の辞書を読む
+（--mode distill -> artifacts/data/visuomotor_demos.pt、または
+--mode collect -> エキスパート元データとしての bc_demos.pt）:
 
   {"obs": [T_i, 31] float32 ..., "act": [T_i, 7] ..., "rgb": [T_i, H, W, 3] uint8 ...}
 
-Each sample t of trajectory i yields:
-  rgb    : (H, W, 3) float32 in [0, 255]  -- raw frame, augmented
-  qpos   : (7,)  = [q_arm(6), prev_gripper_cmd(1)] -- the DEPLOYABLE
-           proprioception (sliced out of the 31-dim sim obs; the real robot
-           reports exactly this via pymycobot get_radians + the runtime's
-           last gripper command)
-  chunk  : (K, 7) actions act[t : t+K], padded by repeating the last action
-  is_pad : (K,) bool padding mask (ACT masks the L1 loss with it)
+軌跡 i の各標本 t が返すもの:
+  rgb    : (H, W, 3) float32 の [0, 255]。生の画像に増補をかけたもの
+  qpos   : (7,) = [q_arm(6), prev_gripper_cmd(1)]。配備できる自己受容
+           感覚（31次元の観測から切り出す。実機は pymycobot の
+           get_radians と、ランタイムが最後に出したグリッパ指令で
+           これと全く同じものを報告する）
+  chunk  : (K, 7) の行動 act[t : t+K]。足りない分は最後の行動で埋める
+  is_pad : (K,) bool の埋めマスク（ACT は L1 損失をこれで覆う）
 
-LIGHT domain randomization happens here, at training time (the standard
-low-cost practice): color jitter (brightness/contrast/saturation/hue),
-RAD-style random crop-shift, and a small random ROLL (ARM_BCRL005). All three
-cover "lighting / angle / perspective may vary a little" with ZERO extra sim
-rendering -- which is what keeps the PDCA cycle short. The physical axes
-(object mass / friction / actuator gains / object colour) are randomised in
-the simulator instead; see configs/env/mycobot_pickplace.yaml domain_rand.
+軽いドメインランダム化はここ、つまり学習時にかける（低コストで標準的な
+やり方）。色の揺らぎ（明度・コントラスト・彩度・色相）、RAD 流の
+ランダムな切り出しずらし、小さなランダムロール（ARM_BCRL005）。
+3つとも「照明・角度・遠近は少し変わり得る」を、シミュレータの描画を
+1枚も増やさずに覆う。それが PDCA の周期を短く保っている。物理側の軸
+（ワークの質量・摩擦・アクチュエータのゲイン・ワークの色）は
+シミュレータでランダム化する。configs/env/mycobot_pickplace.yaml を参照。
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-# obs layout (mujoco_sim/train_arm_mujoco.py):
+# 観測の並び（mujoco_sim/train_arm_mujoco.py）:
 # [q(8), eef_pos(3), eef_quat(4), obj(3), obj-eef(3), place_target(3), prev_action(7)]
 _QPOS_ARM = slice(0, 6)
 _PREV_GRIP = slice(30, 31)
@@ -59,10 +59,10 @@ class ChunkDataset(Dataset):
         return len(self.index)
 
     def _augment(self, rgb_u8: torch.Tensor) -> torch.Tensor:
-        """rgb_u8: (H, W, 3) uint8 -> float32 [0,255], jittered + shifted."""
+        """rgb_u8: (H, W, 3) uint8 -> float32 [0,255]。色を揺らし、ずらす。"""
         from torchvision.transforms import functional as TF
         a = self.aug
-        img = rgb_u8.permute(2, 0, 1)  # CHW uint8
+        img = rgb_u8.permute(2, 0, 1)  # CHW の uint8
         if float(a.brightness) > 0:
             img = TF.adjust_brightness(img, 1.0 + (torch.rand(1).item() * 2 - 1) * float(a.brightness))
         if float(a.contrast) > 0:
@@ -71,13 +71,12 @@ class ChunkDataset(Dataset):
             img = TF.adjust_saturation(img, 1.0 + (torch.rand(1).item() * 2 - 1) * float(a.saturation))
         if float(a.hue) > 0:
             img = TF.adjust_hue(img, (torch.rand(1).item() * 2 - 1) * float(a.hue))
-        # ARM_BCRL005: small random ROLL. The wrist camera is bolted to a
-        # flange by hand and a few degrees of roll is normal -- and roll is
-        # precisely what a single wrist camera cannot recover from, because
-        # its only depth cue is how the scene looks. Replicate-padding by
-        # ceil(h * sin(max_angle)) before rotating guarantees the rotated
-        # centre crop never contains a black corner, so the policy never gets
-        # to learn "black corner => I am near the edge of an augmentation".
+        # ARM_BCRL005 で入れた、小さなランダムロール。手首カメラは手で
+        # フランジに留めるので、数度のロールは普通に起きる。しかもロールは、
+        # 単眼の手首カメラが復元できない量。奥行きの手がかりがシーンの
+        # 見え方だけだから。回す前に ceil(h * sin(max_angle)) ぶん端の値で
+        # 埋めておけば、回転後の中央切り出しに黒い角が絶対に入らない。
+        # だから方策が「黒い角 = 増補の端にいる」を学ぶ余地も無くなる。
         rot = float(a.get("rotate_deg", 0.0) or 0.0)
         if rot > 0:
             ang = (torch.rand(1).item() * 2 - 1) * rot
@@ -89,7 +88,7 @@ class ChunkDataset(Dataset):
                                interpolation=TF.InterpolationMode.BILINEAR)
             img = TF.center_crop(padded, [h, w])
 
-        # RAD-style random shift: replicate-pad then crop back at a random offset
+        # RAD 流のランダムずらし。端の値で埋めてから、ランダムな位置で切り直す
         s = int(a.shift_px)
         if s > 0:
             _, h, w = img.shape
@@ -120,8 +119,8 @@ class ChunkDataset(Dataset):
 
 
 def train_val_split(demos: dict, val_split: float, seed: int):
-    """Split by TRAJECTORY (never by frame -- frames within a trajectory are
-    heavily correlated, frame-level splits leak)."""
+    """分割は軌跡単位で行う（フレーム単位では絶対にやらない。1本の軌跡の
+    中のフレームは強く相関していて、フレーム単位の分割は漏れる）。"""
     n = len(demos["obs"])
     rng = np.random.RandomState(seed)
     perm = rng.permutation(n)

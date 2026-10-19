@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""The two things that produce actions besides a learning algorithm:
+"""学習アルゴリズム以外で行動を作るもの、2つ:
 
-  * ``ExpertController`` -- the scripted IK pick&place expert that generates
-    phase-1 demonstrations (and is the MimicGen source).
-  * ``OnnxPolicy``       -- serves every ONNX this pipeline deploys, so sim
-    evaluation runs the SAME graph the edge runtime will.
+  * ``ExpertController``。フェーズ1のデモを生成するスクリプトIKの
+    pick&place エキスパート（MimicGen の元データにもなる）。
+  * ``OnnxPolicy``。このパイプラインが配備する ONNX を全部こなす。
+    だからシミュレータ評価も、エッジのランタイムと同じグラフを走らせる。
 
-Both are ports of ARM_BCRL005's classes with one substitution: Isaac Lab's
-``DifferentialIKController`` + PhysX Jacobian becomes ``arm_common.ik``'s
-damped least squares on the analytic Jacobian. The phase machine
-(``arm_common/expert.py``), the carrot rate limiter, the action encoding and
-the chunked receding-horizon execution are unchanged.
+どちらも ARM_BCRL005 のクラスの移植で、置き換えたのは1点だけ。
+Isaac Lab の ``DifferentialIKController`` + PhysX のヤコビアンが、
+``arm_common.ik`` の解析ヤコビアンに対する減衰最小二乗になった。
+状態機械（``arm_common/expert.py``）、目標のレート制限、行動の符号化、
+チャンク後退ホライズンの実行は変えていない。
 """
 
 from __future__ import annotations
@@ -33,13 +33,13 @@ ACT_DIM = 7
 
 
 class ExpertController:
-    """Cartesian waypoints from the phase machine -> joint-delta actions.
+    """状態機械が出す直交座標の経由点 -> 関節差分の行動。
 
-    Division of labour, unchanged from ARM_BCRL005:
-      PickPlacePhaseMachine  "which stage of pick&place am I in, and where
-                              should the TCP go / should the gripper be open"
-      ExpertController       "turn that TCP target into the 7-dim action the
-                              environment and the real robot both accept"
+    分担は ARM_BCRL005 から変えていない:
+      PickPlacePhaseMachine  「pick&place のどの段にいて、TCP をどこへ
+                              向けるか、グリッパは開くか」
+      ExpertController       「その TCP 目標を、環境と実機の両方が受け取る
+                              7次元の行動に変える」
     """
 
     def __init__(self, env):
@@ -57,7 +57,7 @@ class ExpertController:
         )
         self.ik = DLSPositionIK(env.tool_kin, damping=float(e.get("ik_damping", 0.05)))
         self._carrot: torch.Tensor | None = None
-        self._carrot_step = float(e.carrot_step)      # m per control step
+        self._carrot_step = float(e.carrot_step)      # 1制御ステップあたりのm
 
     def reset_idx(self, env_ids: torch.Tensor) -> None:
         self.machine.reset_idx(env_ids)
@@ -69,9 +69,9 @@ class ExpertController:
         eef = env.eef_pos_env()
         tgt, gripper_open = self.machine.targets(eef, env.obj_pos_env(), env.place_target)
 
-        # rate-limited intermediate target ("carrot"): the IK is a LOCAL
-        # linearisation, so handing it a target 20 cm away asks it to
-        # extrapolate far outside the region where the Jacobian is valid.
+        # レート制限した中間目標（人参）。IK は局所的な線形化なので、
+        # 20cm 先の目標を渡すのは、ヤコビアンが妥当な領域の外まで
+        # 外挿させることになる。
         if self._carrot is None:
             self._carrot = eef.clone()
         delta = tgt - self._carrot
@@ -86,7 +86,7 @@ class ExpertController:
 
 
 def _ddim_alphas(diffusion_steps: int) -> np.ndarray:
-    """squaredcos_cap_v2 schedule (the Diffusion Policy default)."""
+    """squaredcos_cap_v2 のスケジュール（Diffusion Policy の既定）。"""
     s = 0.008
     t = np.arange(diffusion_steps + 1, dtype=np.float64) / diffusion_steps
     f = np.cos((t + s) / (1 + s) * np.pi / 2) ** 2
@@ -97,7 +97,7 @@ def _ddim_alphas(diffusion_steps: int) -> np.ndarray:
 
 def _ddim_sample(denoiser, obs_emb: np.ndarray, chunk: int, act_dim: int,
                  alphas_cumprod: np.ndarray, ddim_steps: int) -> np.ndarray:
-    """Deterministic DDIM sampling with the exported epsilon-denoiser graph."""
+    """書き出したイプシロン予測グラフを使う、決定的な DDIM サンプリング。"""
     B = obs_emb.shape[0]
     T = len(alphas_cumprod)
     ts = np.linspace(T - 1, 0, ddim_steps).round().astype(np.int64)
@@ -115,18 +115,18 @@ def _ddim_sample(denoiser, obs_emb: np.ndarray, chunk: int, act_dim: int,
 
 
 class OnnxPolicy:
-    """Serves every ONNX this pipeline deploys, dispatching on the graph's
-    declared inputs and metadata:
+    """このパイプラインが配備する ONNX を全部こなす。グラフが宣言する
+    入力とメタデータで振り分ける:
 
-      * PPO export             : single "obs" input, one action out
-      * robomimic BC export    : "flat" (+ optional "rgb") inputs
-      * ACT visuomotor export  : "rgb" + "qpos" -> (B, chunk, act) chunk,
-                                 executed with a receding horizon
-      * Diffusion Policy export: "rgb" + "qpos" encoder + companion
-                                 *_denoiser.onnx, DDIM loop -> action chunk
+      * PPO の書き出し   : 入力は "obs" 1つ、行動が1つ出る
+      * robomimic BC     : 入力は "flat"（+ 任意で "rgb"）
+      * ACT 視覚運動     : "rgb" + "qpos" -> (B, chunk, act) のチャンク。
+                                 後退ホライズンで実行する
+      * Diffusion Policy : "rgb" + "qpos" のエンコーダ + 対になる
+                                 *_denoiser.onnx、DDIM ループ -> 行動チャンク
 
-    Chunked policies are stateful per env (buffer + cursor); call ``reset_idx``
-    on episode boundaries, exactly like the scripted expert.
+    チャンク方式の方策は環境ごとに状態（バッファとカーソル）を持つので、
+    エピソードの切れ目で ``reset_idx`` を呼ぶ。スクリプトエキスパートと同じ。
     """
 
     def __init__(self, onnx_path: str, env, execute_horizon: int | None = None):
@@ -158,7 +158,7 @@ class OnnxPolicy:
         if self.chunk:
             n = env.num_envs
             self._buf = np.zeros((n, self.chunk, ACT_DIM), dtype=np.float32)
-            self._cursor = np.full(n, self.chunk, dtype=np.int64)   # empty -> infer
+            self._cursor = np.full(n, self.chunk, dtype=np.int64)   # 空なら推論する
 
     def reset_idx(self, env_ids: torch.Tensor) -> None:
         if self.chunk:
@@ -181,7 +181,7 @@ class OnnxPolicy:
         return self.sess.run(None, feed)[0]        # ACT: (B, chunk, act)
 
     def __call__(self, obs: torch.Tensor) -> torch.Tensor:
-        if not self.chunk:                          # state policies: single-step
+        if not self.chunk:                          # 状態方策は1ステップ
             feed = self._feed_common()
             flat = "flat" if "flat" in self.input_names else (
                 "obs" if "obs" in self.input_names else self.input_names[0])
@@ -189,9 +189,9 @@ class OnnxPolicy:
                 feed[flat] = obs.cpu().numpy().astype(np.float32)
             return torch.from_numpy(self.sess.run(None, feed)[0]).to(self.env.device)
 
-        # receding horizon: re-infer the whole batch whenever ANY env ran out.
-        # Batching is free here -- the expensive part is rendering the frames,
-        # which already happened for every env.
+        # 後退ホライズン。どれか1つの環境で使い切ったら、全部まとめて
+        # 推論し直す。ここでのバッチ化は無料で、高いのはフレームの描画。
+        # それは既に全環境ぶん済んでいる。
         if (self._cursor >= self.execute_horizon).any():
             fresh = self._infer_chunk()
             need = self._cursor >= self.execute_horizon
