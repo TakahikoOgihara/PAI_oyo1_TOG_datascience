@@ -1,0 +1,29 @@
+# Experiment tracking. All three tools are on by default and all three are
+# LOCAL -- no account, no API key, no network. That combination is what makes
+# them usable in a client engagement where the data cannot leave the machine.
+#
+#   MLflow      the RUN LEDGER: params, metrics, artifacts, and the Model
+#               Registry that decides which ONNX is "champion". This is the
+#               system of record -- src/infer.py reads it to pick what ships.
+#   W&B         the LIVE VIEW: training curves you watch while a run is in
+#               flight, and (ARM_BCRL006) the closed-loop evaluation of every
+#               policy INCLUDING inference, logged as a table + bar chart so
+#               one project page answers "did it get better".
+#   TensorBoard the DEBUG VIEW: the per-iteration PPO scalars
+#               stable-baselines3 writes natively (value loss, entropy,
+#               explained variance, KL). When RL collapses, this is the only
+#               one of the three with the resolution to say why.
+mlflow:
+  tracking_uri: sqlite:///${oc.env:PWD}/artifacts/mlflow.db
+  experiment_name: arm_bcrl006_pickplace
+wandb:
+  enabled: true
+  mode: offline          # offline | online | disabled.
+                         # offline writes a real W&B run to artifacts/wandb
+                         # with no account; `wandb sync` uploads it later, and
+                         # mode=online after `wandb login` streams it live.
+  project: arm_bcrl006_pickplace
+  dir: ${oc.env:PWD}/artifacts/wandb
+tensorboard:
+  enabled: true
+  dir: ${oc.env:PWD}/artifacts/tb

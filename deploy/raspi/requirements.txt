@@ -1,0 +1,9 @@
+# Raspberry Pi 4B inside the myCobot 280 Pi (2023) -- bridge dependencies.
+# Pinned: every hardware test in this project ran on 3.9.9; the 4.x line is
+# unverified against the bridge (get_radians/send_radians/set_gripper_value).
+pymycobot==3.9.9
+
+# NOTE: the safety layer (safety.py + mycobot_fk.py) deliberately needs NOTHING
+# beyond the Python standard library, so it can never fail to import at the
+# moment it matters. Verify it before touching the arm:
+#   python3 mycobot_fk.py && python3 safety.py

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ARM_BCRL006 operator console</title>
+<style>
+  :root { --bg:#101418; --panel:#1a2027; --line:#2a333d; --fg:#dde5ec;
+          --accent:#3ba0ff; --ok:#37b26c; --warn:#e0a63c; --stop:#d64545; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 "Segoe UI", system-ui, sans-serif; }
+  header { padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  .badge { padding:2px 10px; border-radius:10px; font-size:12px; background:var(--line); }
+  .badge.auto { background:var(--ok); color:#fff; }
+  .badge.pause { background:var(--warn); color:#222; }
+  .badge.offline { background:var(--stop); color:#fff; }
+  main { display:grid; grid-template-columns: 1fr 340px; gap:14px; padding:14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  #cam { width:100%; aspect-ratio:4/3; background:#000; border-radius:6px; object-fit:contain; }
+  .stats { display:flex; gap:16px; margin-top:8px; font-size:12px; color:#9db0c0; }
+  h2 { font-size:13px; margin:0 0 8px; color:#9db0c0; text-transform:uppercase; letter-spacing:.06em; }
+  .joints .row { display:grid; grid-template-columns: 34px 1fr 64px 30px 30px; gap:6px;
+                 align-items:center; margin-bottom:6px; }
+  .bar { height:8px; background:var(--line); border-radius:4px; position:relative; overflow:hidden; }
+  .bar i { position:absolute; top:0; bottom:0; left:50%; width:2px; background:#55606c; }
+  .bar b { position:absolute; top:0; bottom:0; width:8px; margin-left:-4px;
+           background:var(--accent); border-radius:4px; }
+  .val { font-family:ui-monospace, monospace; font-size:12px; text-align:right; }
+  button { background:var(--line); color:var(--fg); border:1px solid #3a4550;
+           border-radius:6px; padding:8px 10px; cursor:pointer; font-size:13px; }
+  button:hover { background:#333f4b; }
+  button.primary { background:var(--ok); border-color:var(--ok); color:#fff; }
+  button.warn { background:var(--warn); border-color:var(--warn); color:#222; }
+  button.stop { background:var(--stop); border-color:var(--stop); color:#fff;
+                font-weight:700; width:100%; padding:14px; font-size:15px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px; }
+  .jog { width:100%; padding:4px 0; font-size:12px; }
+  .section { margin-bottom:14px; }
+  .badge.latched { background:var(--stop); color:#fff; }
+  .badge.safe { background:var(--line); color:var(--fg); }
+  .badge.ok { background:var(--ok); color:#fff; }
+  .hint { font-size:11px; color:#8fa2b2; margin:10px 0 8px; line-height:1.45; }
+  #status { color:#e0a63c; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ARM_BCRL006 &mdash; myCobot 280 Pi operator console</h1>
+  <span id="mode" class="badge offline">offline</span>
+  <span id="policy" class="badge">policy: -</span>
+  <span id="homed" class="badge">home: -</span>
+  <span id="safety" class="badge">safety: -</span>
+</header>
+<main>
+  <div class="panel">
+    <h2>wrist camera (Jetson Orin Nano)</h2>
+    <img id="cam" alt="camera stream">
+    <div class="stats">
+      <span>inference: <b id="lat">-</b> ms</span>
+      <span>control loop: <b id="hz">-</b> Hz</span>
+      <span>gripper: <b id="grip">-</b></span>
+      <span>tool height: <b id="toolz">-</b> mm</span>
+      <span>TCP: <b id="tcp">-</b></span>
+    </div>
+    <div class="stats"><span id="status">&nbsp;</span></div>
+  </div>
+  <div>
+    <div class="panel section">
+      <h2>policy</h2>
+      <div class="grid2">
+        <button class="primary" onclick="send({action:'start'})">&#9654; Start (auto)</button>
+        <button class="warn" onclick="send({action:'pause'})">&#10074;&#10074; Pause</button>
+      </div>
+      <button class="stop" onclick="send({action:'estop'})">E-STOP</button>
+      <p class="hint">Start homes the arm to the training ready pose first and
+      refuses to run if it does not get there. The Pi's safety layer (virtual
+      floor plane + impact stop) can pause the policy at any time &mdash; clear
+      the obstruction, press <b>Safety reset</b>, then Home and Start.</p>
+      <button id="sreset" onclick="send({action:'safety_reset'})">Safety reset</button>
+    </div>
+    <div class="panel section">
+      <h2>manual (pause mode)</h2>
+      <div class="grid2">
+        <button onclick="send({action:'home'})">Home pose</button>
+        <button onclick="send({action:'gripper', open: !gripOpen})">Gripper open/close</button>
+      </div>
+      <div class="joints" id="joints"></div>
+    </div>
+  </div>
+</main>
+<script>
+const LIMITS = [[-2.9321,2.9321],[-2.4434,2.4434],[-2.6179,2.6179],
+                [-2.6179,2.6179],[-2.7052,2.7925],[-3.14159,3.14159]];
+let ws = null, gripOpen = true;
+
+const jointsDiv = document.getElementById('joints');
+for (let j = 0; j < 6; j++) {
+  jointsDiv.insertAdjacentHTML('beforeend', `
+    <div class="row">
+      <span>J${j+1}</span>
+      <div class="bar"><i></i><b id="b${j}" style="left:50%"></b></div>
+      <span class="val" id="v${j}">-</span>
+      <button class="jog" onclick="send({action:'jog', joint:${j}, dir:-1})">&minus;</button>
+      <button class="jog" onclick="send({action:'jog', joint:${j}, dir:1})">+</button>
+    </div>`);
+}
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'error') { console.warn(m.error); return; }
+    if (m.type !== 'telemetry') return;
+    const mode = document.getElementById('mode');
+    mode.textContent = m.mode;
+    mode.className = 'badge ' + m.mode;
+    document.getElementById('policy').textContent = 'policy: ' + m.policy;
+    document.getElementById('lat').textContent = m.latency_ms;
+    document.getElementById('hz').textContent = m.loop_hz;
+    gripOpen = m.grip_open;
+    document.getElementById('grip').textContent = gripOpen ? 'open' : 'closed';
+    const homed = document.getElementById('homed');
+    homed.textContent = 'home: ' + (m.homed ? 'ready' : 'NOT at ready pose');
+    homed.className = 'badge ' + (m.homed ? 'ok' : 'pause');
+    const sf = document.getElementById('safety');
+    const latched = m.safety && m.safety.latched;
+    sf.textContent = 'safety: ' + (latched ? m.safety.reason : 'ok');
+    sf.className = 'badge ' + (latched ? 'latched' : 'safe');
+    document.getElementById('status').textContent =
+      (m.status || '') + (latched && m.safety.detail ? '  |  ' + m.safety.detail : '');
+    document.getElementById('toolz').textContent =
+      (m.tool_z === undefined || m.tool_z === null) ? '-' : (m.tool_z * 1000).toFixed(0);
+    document.getElementById('tcp').textContent =
+      m.tcp ? m.tcp.map(v => v.toFixed(3)).join(', ') : '-';
+    if (m.jpeg) document.getElementById('cam').src = 'data:image/jpeg;base64,' + m.jpeg;
+    m.q.forEach((q, j) => {
+      const [lo, hi] = LIMITS[j];
+      const frac = Math.min(1, Math.max(0, (q - lo) / (hi - lo)));
+      document.getElementById('b' + j).style.left = (frac * 100).toFixed(1) + '%';
+      document.getElementById('v' + j).textContent = q.toFixed(3);
+    });
+  };
+  ws.onclose = () => {
+    document.getElementById('mode').textContent = 'offline';
+    document.getElementById('mode').className = 'badge offline';
+    setTimeout(connect, 1500);
+  };
+}
+connect();
+</script>
+</body>
+</html>

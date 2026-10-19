@@ -1,0 +1,133 @@
+# =====================================================================
+# ARM_BCRL006 -- one Hydra config tree for the whole pipeline, run
+# entirely on a local PC with MuJoCo:
+#   assets     (MJCF generated from deploy/raspi/mycobot_fk.py, one-time)
+#   collect    (scripted IK expert, wrist camera recorded)
+#   -> MIMICGEN (phase 1.5): warp those demos onto new scenes, keep the
+#      successes -- and make the demo SOURCE swappable for real-robot demos
+#   -> preprocess + robomimic HDF5 + wrist-camera quality gate
+#   -> robomimic BC training (low_dim -- the RL-init teacher)
+#   -> closed-loop evaluation vs baselines
+#   -> PPO fine-tuning initialized FROM the BC weights (stable-baselines3)
+#   -> DISTILL: RL champion re-collects camera demos (teacher-student)
+#   -> visuomotor training (ACT default / Diffusion Policy variant)
+#   -> closed-loop visuomotor evaluation
+#   -> ONNX deploy + MLflow Registry champions + release gate + edge bundle
+#
+# AND, orthogonal to the pipeline, the study this project was built to run:
+#   src/ablation.py -- 2x2 over {MimicGen off/on} x {domain randomisation
+#   off/on}, each condition evaluated on BOTH a nominal and a randomised test
+#   environment. See design notes §5.
+#
+# There is exactly one simulator entry point: mujoco_sim/train_arm_mujoco.py
+# (modes: collect / mimicgen / eval_only / rl / distill / play).
+# =====================================================================
+defaults:
+  - env: mycobot_pickplace
+  - bc: robomimic_bc
+  - rl: ppo
+  - visuomotor: act
+  - mimicgen: default
+  - ablation: default
+  - safety: default
+  - mlops: default
+  - _self_
+  - override hydra/sweeper: optuna
+
+experiment_name: arm_bcrl006_pickplace
+seed: 42
+device: cuda          # training device. The SIMULATOR is always CPU (MuJoCo).
+
+collect:
+  # 32 envs x 8 episode batches ~ 256 demos -- robomimic's canonical
+  # manipulation regime (~200 demos/task), same as ARM_BCRL005.
+  #
+  # THIS IS THE MOST LOAD-BEARING NUMBER IN THE FILE, and it is set to what the
+  # ablation measured rather than to a round number (artifacts/ablation/):
+  #
+  #     ~13,000 rows of expert demonstrations  ->  BC success 0.001
+  #     ~37,000 rows of expert demonstrations  ->  BC success 0.885
+  #     ~36,000 rows, half of them MimicGen-generated  ->  0.539
+  #
+  # Two things follow, and both are in the default now.
+  #   1. There is a CLIFF. 8 batches (~20,000 rows) sits below it. 14 batches
+  #      (~36,000 rows) sits above it. Before tuning a learning rate, check
+  #      which side of the cliff you are on.
+  #   2. A MimicGen-generated row is worth roughly 60 % of a collected one --
+  #      it warps the same source trajectories onto new object poses, so it
+  #      adds coverage but no new information. In SIMULATION, where a
+  #      demonstration costs seconds, collect them. MimicGen is for the case
+  #      where a demonstration costs a person an afternoon (a real robot), and
+  #      that is the case phase 1.5 exists for.
+  #
+  # This default changed BECAUSE of the measurement: 8 -> 14. That is what the
+  # experiment was for.
+  num_envs: 32
+  episodes: 14            # per-env batches -> ~450 trajectories, ~36,000 rows
+  action_noise: 0.1       # DART-style: execute noisy action, label clean
+  novice_ratio: 0.1       # fraction of envs emulating a poor operator
+  keep_failed: false      # dataset = successful pick&place only
+  camera: true            # record wrist frames (needed by the phase-2 gate)
+  # Shard the run across processes. Rendering -- not physics -- is the
+  # bottleneck, and it is embarrassingly parallel: each worker owns its own
+  # MuJoCo model, data and GL context. 0 = auto (min(6, cpu_count // 3)).
+  workers: 0
+
+eval:
+  num_envs: 64
+  episodes: 4
+  max_steps: 1000         # a STEP BUDGET for the whole battery, not a per-
+                          # episode limit -- the env's own 240-step timeout
+                          # always fires first. ARM_BCRL005 used 300, which
+                          # silently delivered ~1 episode per env instead of
+                          # the 4 requested: a slow policy would finish 65
+                          # episodes where a fast one finished 193, so the two
+                          # were not compared on the same sample size.
+                          # 4 x 240 = 960 < 1000 guarantees the full battery.
+  # Image policies render every step, so their closed-loop battery is sized
+  # by the graphics budget rather than by statistics (operations guide §5).
+  visuomotor_num_envs: 16
+  visuomotor_episodes: 4
+
+deploy:
+  # RELEASE GATE (phase 10, src/infer.py). An artifact that does not clear
+  # these thresholds IN SIMULATION is not allowed into the edge bundle. This
+  # is the cheapest quality control in the pipeline and it is the difference
+  # between "we deployed a model" and "we deployed a model that works".
+  min_success_rate: 0.55     # closed-loop success of the visuomotor policy.
+                             # The ACT student is distilled from the RL
+                             # teacher and distillation only loses, so this is
+                             # ~80 % of the teacher: demanding, but reachable.
+  max_place_err: 0.035       # m, mean |obj_xy - target_xy|
+  min_lift: 0.055            # m, mean peak block height (= lifted_thresh):
+                             # catches "never actually picked it up"
+  force: false               # true = build the bundle anyway (record WHY
+                             # somewhere when you use it)
+
+video:
+  # src/record_video.py -- the submission clip.
+  # The assignment requires 1-5 minutes and says a sped-up video must say so;
+  # speed=2 puts "2x speed" on the title card. 5 stages x 26 s + 14 s of cards
+  # lands at ~2 min 30 s at 1x.
+  seconds_per_policy: 26.0
+  speed: 1
+  out: artifacts/video/pickplace_demo.mp4
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: artifacts/hydra/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: artifacts/hydra_sweep/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}
+  sweeper:
+    direction: minimize
+    study_name: arm_bcrl006_sweep
+    storage: null
+    n_trials: 8
+    n_jobs: 1
+    params:
+      bc.lr: tag(log, interval(0.0001, 0.005))
+      bc.weight_decay: tag(log, interval(0.000001, 0.001))
+      bc.batch_size: choice(128, 256, 512)

@@ -1,0 +1,85 @@
+# MimicGen (phase 1.5) -- object-centric demonstration augmentation.
+#
+# ARM_BCRL005 ran NVIDIA's `isaaclab_mimic` package verbatim. That package is
+# part of Isaac Lab and cannot run without Isaac Sim, so ARM_BCRL006 carries
+# the algorithm itself (mimicgen/generation.py, ~200 lines) -- which is what
+# ARM_BCRL004 did before it, and which is why the two-step 004 -> 005 learning
+# path was worth taking: the method is understood, not borrowed.
+#
+# THE METHOD IS ONE LINE (Mandlekar et al., CoRL 2023, eq. 1):
+#
+#     T_eef_new = T_ref_new @ inv(T_ref_src) @ T_eef_src
+#
+# Express a recorded end-effector trajectory in the frame of the object the
+# subtask is ABOUT, then put that frame where the object is in the new scene.
+# Replay the result, keep it only if the environment's own success term fires.
+#
+# WHY IT IS IN THIS PROJECT AT ALL -- two reasons, both about the real robot:
+#   1. It makes the demo SOURCE swappable. Phase 1 is a scripted IK expert,
+#      which assumes the task can be scripted. The moment that assumption
+#      breaks the whole pipeline stops. MimicGen turns ~10 hand-guided real
+#      demonstrations into hundreds (operations guide §7).
+#   2. It is the augmentation axis of the 2x2 study in src/ablation.py: does
+#      generating more data from the same demos actually buy success rate?
+# SHIPS OFF -- and that is a measured decision, not an oversight.
+#
+# The 2x2 study (artifacts/ablation/) trained BC on four datasets of comparable
+# size and evaluated all of them in closed loop:
+#
+#   ~37,000 rows, all collected by the expert        ->  0.885 +- 0.082
+#   ~36,000 rows, expert demos + MimicGen-generated  ->  0.539 +- 0.236
+#
+# Adding generated rows to collected ones made the policy WORSE and much less
+# reproducible. The reason is not that the generated trajectories are invalid
+# -- every one of them was replayed in the simulator and only kept if the
+# environment's own success term fired. It is that they are executed by the
+# IK replay of a WARPED waypoint sequence, so for the same observation the
+# dataset now contains two different actions. A unimodal regression policy
+# (robomimic BC minimises MSE) answers a multimodal target by averaging it,
+# and the average of two valid ways to reach a block is a way that misses it.
+#
+# Two consequences, and both are in the defaults:
+#   1. IN SIMULATION, where a demonstration costs seconds, collect more
+#      (configs/config.yaml collect.episodes) instead of generating.
+#   2. MimicGen's value is the regime it was designed for: a REAL robot, where
+#      one demonstration costs a person an afternoon and 0.539 from ten of
+#      them beats 0.000 from ten of them. operations guide ch.7 is that
+#      path, and `mimicgen.enable=true` turns this phase back on for it.
+#      With a multimodal policy class (ACT's CVAE, Diffusion Policy) the mode
+#      averaging above does not apply -- which is the natural next experiment.
+enable: false
+source_file: bc_demos.pt        # phase 1 output, or a converted real-robot
+                                # recording (mimicgen/import_real_demos.py)
+annotated_file: bc_demos_annotated.hdf5
+max_source_demos: 0             # 0 = use all. Set to e.g. 10 to REHEARSE the
+                                # few-real-demos regime BEFORE touching hardware
+num_envs: 32
+episodes: 8                     # per-env batches -> ~256 generation ATTEMPTS
+camera: false                   # record wrist frames for the GENERATED demos?
+                                # No, by default. The generated demos feed the
+                                # state policy (BC -> PPO); the visuomotor stage
+                                # trains on the distillation data from phase 7,
+                                # and the phase-2 image gate reads phase 1's
+                                # frames. Recording them here would add ~3.5 GB
+                                # and ~8 minutes for pixels nothing reads.
+                                # Set true if you want visuomotor.source=expert
+                                # to see the generated demos too.
+workers: 0                      # 0 = auto (camera rendering is the bottleneck)
+keep_source: true               # include the original demos in the output
+output_file: bc_demos_mimicgen.pt
+generated_file: bc_demos_mimicgen_summary.json
+selection: nearest_neighbor_object   # nearest_neighbor_object | random
+nn_k: 3                         # sample uniformly among the k nearest source
+                                # demos, so the generated set keeps variety
+                                # instead of collapsing onto one trajectory
+interpolation_steps: 12         # steps blended between the current pose and
+                                # the first warped pose of each subtask
+subtask_term_offset_range: [0, 0]
+action_noise: 0.0               # noise added to the replayed action
+min_yield: 0.30                 # fraction of attempts that must succeed. A low
+                                # yield means the warped trajectories are not
+                                # executable, which is information -- the run
+                                # STOPS instead of training on 30 demos.
+min_source_success: 0.70        # the scripted expert's own success rate is the
+                                # ceiling on data quality; below this, fix the
+                                # expert before generating anything

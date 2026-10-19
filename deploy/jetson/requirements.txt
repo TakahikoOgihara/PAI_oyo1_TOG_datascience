@@ -1,0 +1,8 @@
+# Jetson Orin Nano 8GB (JetPack 6.x) -- policy runtime dependencies.
+# tensorrt ships with JetPack; opencv (cv2) ships with the JetPack image.
+# cuda-python does NOT ship with JetPack -- pin to 12.x: 13.x drops the
+# legacy `from cuda import cudart` import path used by trt_runner.py.
+numpy<2             # JetPack's cv2 is compiled against NumPy 1.x; 2.x breaks cv2 import
+websockets>=12
+cuda-python==12.6.*  # match JetPack 6.x CUDA 12.6 (fallback: "cuda-python<13")
+onnxruntime          # fallback backend when no TensorRT engine is built yet
